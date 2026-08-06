@@ -2,7 +2,7 @@
 
 from nicegui import ui
 
-BRAND = "📧 Email Assistant"
+BRAND = "Email Assistant"
 
 GLOBAL_CSS = """
 .nicegui-content {
@@ -33,7 +33,9 @@ def create_layout(title: str, active: str) -> None:
     # ---- Dark drawer ----
     with ui.left_drawer(value=True, bordered=False).classes("bg-slate-900").props("fixed"):
         with ui.column().classes("w-full gap-1 p-3"):
-            ui.label(BRAND).classes("text-white text-xl font-bold px-3 pt-2 pb-4")
+            with ui.row().classes("items-center gap-2 px-3 pt-2 pb-4"):
+                ui.icon("mark_email_read").classes("text-2xl text-indigo-400")
+                ui.label(BRAND).classes("text-white text-xl font-bold")
             ui.separator().classes("bg-slate-700")
 
             _nav_item("Dashboard", "dashboard", "/", active == "dashboard")

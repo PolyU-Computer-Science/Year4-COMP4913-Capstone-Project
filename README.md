@@ -66,7 +66,7 @@ flowchart TB
     end
 
     subgraph PreProcess["Pre-Processing (Python)"]
-        Fetcher["Email Fetcher\n(email_fetcher.py)"]
+        Fetcher["Email Fetcher\n(core/email_fetcher.py)"]
     end
 
     subgraph Crew["CrewAI (Cognitive Pipeline)"]
@@ -108,7 +108,7 @@ The email processing pipeline consists of a deterministic Python fetch layer fol
 
 ### Pre-Processing: Email Fetcher
 
-Email retrieval is handled by `email_fetcher.py` — a plain Python module that:
+Email retrieval is handled by `core/email_fetcher.py` — a plain Python module that:
 - Connects to IMAP/Gmail API to pull unread emails
 - Extracts structured metadata (sender, subject, body, timestamp)
 - Passes cleaned data to the AI pipeline
@@ -119,7 +119,7 @@ This keeps LLM calls focused purely on reasoning tasks.
 
 | Agent Role | Goal | Tools |
 | --- | --- | --- |
-| **Classifier** | Analyze intent, sentiment, urgency; assign specific categories. | None (LLM reasoning) |
+| **Classifier** | Determine category (question/incident/problem/task/spam), topic, and priority; produce a summary. | None (LLM reasoning) |
 | **Drafter** | Generate context-aware reply drafts matching professional tone. | RAG, MCP tools |
 
 ### Task Flow & Structured Validation
@@ -129,27 +129,67 @@ To ensure high system reliability, the classification task leverages **Pydantic 
 ```python
 from pydantic import BaseModel, Field
 
+
 class EmailClassification(BaseModel):
-    intent: str = Field(description="Detected category: urgent, meeting, inquiry, spam, etc.")
+    category: str = Field(description="question, incident, problem, task, or spam")
+    topic: str = Field(description="What the email is about, e.g. refund, bug_report, password_reset")
+    priority: str = Field(description="low, normal, high, or urgent")
     urgency_score: int = Field(description="Urgency scale from 1 to 10")
     summary: str = Field(description="1-sentence summary of the email content")
     requires_reply: bool = Field(description="Whether a reply draft is needed")
-
+    custom: dict = Field(default_factory=dict, description="Per-mailbox custom field values")
 ```
+
+> **Note:** `status` is intentionally **not** part of the AI classification
+> output — it is a workflow state managed by humans/automations, not something
+> the LLM should decide.
 
 ---
 
 ## Core Workflow & Classification
 
+### Email (Ticket) Data Model
+
+Each incoming email is treated as a **ticket** with two kinds of fields,
+following the industry-standard helpdesk model (Zendesk, Freshdesk, ServiceNow):
+
+**Standard fields** — present on every email/ticket:
+
+| Field | Meaning | Values | Set by |
+| --- | --- | --- | --- |
+| **status** | Lifecycle stage of the ticket | `new` → `open` → `pending` → `solved` → `closed` | Workflow / agent (not AI) |
+| **priority** | How urgent it is | `low` / `normal` / `high` / `urgent` | AI suggests, agent can override |
+| **category** | What *kind* of request it is (stable, small set) | `question` / `incident` / `problem` / `task` / `spam` | AI (classifier) |
+| **topic** | What the email is *about* (open-ended subject matter) | `refund`, `bug_report`, `password_reset`, `lead`, … | AI (classifier) |
+
+**Custom fields** — defined per mailbox by an admin, extending the ticket:
+
+| Example | Type | Scope |
+| --- | --- | --- |
+| `product_name` | dropdown | support@ |
+| `order_number` | text | support@ |
+| `deal_value` | number | sales@ |
+
+> **Why this split?** `status` is a workflow state that humans/automations
+> update — it is **not** something the LLM should invent. `category` is a small,
+> stable enumeration; `topic` is free-form and mailbox-scoped (a support mailbox
+> gets `refund`/`bug_report`, a sales mailbox gets `lead`/`proposal`). Custom
+> fields let each mailbox collect its own structured data.
+
 ### Email Classification Categories
+
+The **category** field (what kind of request) is kept small and stable:
 
 | Category | Description | Auto-Reply Strategy |
 | --- | --- | --- |
-| **urgent** | Requires immediate attention | Flag for human review, draft holding response |
-| **meeting** | Meeting invitations, scheduling | Draft acceptance/tentative based on schedule |
-| **inquiry** | Questions, requests for info | Draft reply using RAG (FAQ knowledge base) |
-| **notification** | Automated system alerts | Archive only (no reply) |
+| **question** | A question or request for information | Draft reply using RAG (FAQ knowledge base) |
+| **incident** | A single occurrence of a problem | Flag for human review, draft holding response |
+| **problem** | A larger issue affecting many | Flag for human review |
+| **task** | Assignable action item | Draft acceptance/tentative response |
 | **spam** | Unsolicited or promotional | Move to spam folder |
+
+**Topic** is the open-ended classification (what the email is about) and is
+defined per mailbox — see [UI & Admin Settings Plan](#ui--admin-settings-plan).
 
 ---
 
@@ -161,7 +201,8 @@ The project uses the following data stores:
 
 | Database | File | Purpose | Status |
 | --- | --- | --- | --- |
-| **Email Store** | `data/emails.db` | Persist fetched emails (sender, subject, body, classification, reply draft) for UI rendering and history. | 🔜 Pending |
+| **Email Store** | `data/emails.db` | Persist fetched emails as tickets (sender, subject, body, status, priority, category, topic, custom fields, reply draft) for UI rendering and history. | 🔜 Pending |
+| **Settings Store** | `data/settings.db` | Persist admin configuration (AI, mail accounts, topics, fields, roles, users, teams). See [UI & Admin Settings Plan](#ui--admin-settings-plan). | 🔜 Pending |
 | **CrewAI Long-Term Memory** | `data/crew_memory.db` | SQLite-backed long-term memory for CrewAI, persisting agent insights across sessions. Enable with `memory=True` on the Crew. | 🔜 Pending |
 
 ### ChromaDB — RAG Vector Store
@@ -172,11 +213,16 @@ The project uses the following data stores:
 | **FAQ Knowledge Base** | Index company FAQs and policy documents to ground AI responses and eliminate hallucinations. | 🔜 Pending |
 | **Embedding Provider** | Configurable via `EMBEDDING_PROVIDER` (ollama / openai). Local embeddings keep all data on-premises. | Config ready |
 
+> **Scope note:** Knowledge sources are **per-mailbox** in the planned model —
+> support@ queries its own FAQ/docs, sales@ its own. See
+> [UI & Admin Settings Plan](#ui--admin-settings-plan).
+
 ### Database Configuration (Planned)
 
 ```dotenv
 # SQLite paths (auto-created on first run)
 SQLITE_EMAIL_DB=data/emails.db
+SQLITE_SETTINGS_DB=data/settings.db
 SQLITE_MEMORY_DB=data/crew_memory.db
 
 # ChromaDB (RAG vector store)
@@ -185,7 +231,7 @@ CHROMA_COLLECTION_NAME=email_knowledge
 
 # Embedding model for RAG
 EMBEDDING_PROVIDER=ollama
-EMBEDDING_BASE_URL=http://localhost:8080/
+EMBEDDING_BASE_URL=http://localhost:11434
 EMBEDDING_MODEL=qwen3-embedding-4b
 ```
 
@@ -246,10 +292,16 @@ email_assistant/
     └── email_assistant/
         ├── __init__.py
         ├── main.py               # Entry points (run, train, test, replay, trigger)
-        ├── crew.py               # @CrewBase: Classifier & Drafter agents + tasks
         ├── models.py             # Pydantic models (EmailClassification)
         ├── service.py            # Multi-provider LLM configuration & validation
-        ├── email_fetcher.py      # Deterministic email retrieval + sample data
+        ├── agents/
+        │   ├── __init__.py
+        │   └── crew.py           # @CrewBase: Classifier & Drafter agents + tasks
+        ├── core/
+        │   ├── __init__.py
+        │   ├── email_fetcher.py  # Deterministic IMAP retrieval + sample data
+        │   ├── email_service.py  # Processing orchestration layer
+        │   └── database.py       # SQLite persistence layer (planned)
         ├── config/
         │   ├── agents.yaml       # Agent definitions (classifier, drafter)
         │   └── tasks.yaml        # Task definitions (classify → draft)
@@ -303,11 +355,11 @@ API keys.
 LLM_PROVIDER=local
 LLM_TEMPERATURE=0.2
 LLM_TIMEOUT=120
-LLM_MAX_TOKENS=8000
+LLM_MAX_TOKENS=2000
 
 # Local / OpenAI-compatible server (LM Studio, vLLM, llama.cpp, Ollama)
-LOCAL_BASE_URL=http://localhost:8080/v1
-LOCAL_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+LOCAL_BASE_URL=http://localhost:11434/v1
+LOCAL_MODEL=local-model
 # LOCAL_API_KEY=sk-...           # Optional: for authenticated proxies/middleware
 
 # OpenRouter Example
@@ -341,19 +393,24 @@ LOCAL_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
 
 ```
 
-### Email Configuration (Planned)
+### Email Configuration (IMAP)
 
 ```dotenv
-EMAIL_ADDRESS=your@gmail.com
-EMAIL_PASSWORD=your-app-password    # Use Google App Password
-
+# IMAP inbox access (Gmail requires an App Password)
+EMAIL_ENABLED=false
+EMAIL_SERVER=imap.gmail.com
+EMAIL_PORT=993
+EMAIL_ADDRESS=
+EMAIL_PASSWORD=your-app-password   # Use Google App Password
+EMAIL_FOLDER=INBOX
+EMAIL_MAX_EMAILS=50
 ```
 
 ### RAG & Embedding Configuration (Planned)
 
 ```dotenv
 EMBEDDING_PROVIDER=ollama
-EMBEDDING_BASE_URL=http://localhost:8080/
+EMBEDDING_BASE_URL=http://localhost:11434
 EMBEDDING_MODEL=qwen3-embedding-4b
 
 ```
@@ -363,6 +420,7 @@ EMBEDDING_MODEL=qwen3-embedding-4b
 ```dotenv
 # SQLite
 SQLITE_EMAIL_DB=data/emails.db
+SQLITE_SETTINGS_DB=data/settings.db
 SQLITE_MEMORY_DB=data/crew_memory.db
 
 # ChromaDB
@@ -383,9 +441,9 @@ uv run crewai run
 ```
 
 Runs the full pipeline: `fetch_emails()` → Classifier → Drafter. Processes all
-sample emails defined in `email_fetcher.py`. The classification result is
+sample emails defined in `core/email_fetcher.py`. The classification result is
 validated against the `EmailClassification` Pydantic model, and the final draft
-is written to `draft_reply.txt`.
+is written to `draft_reply.txt` (git-ignored runtime artifact).
 
 ### Web UI (NiceGUI)
 
@@ -481,6 +539,7 @@ flowchart LR
         M1["Mailbox<br/>support@"]
         M2["Mailbox<br/>sales@"]
         TP1["Topics<br/>(per mailbox)"]
+        F1["Custom Fields<br/>(per mailbox)"]
         KB1["Knowledge / RAG<br/>(per mailbox)"]
     end
 
@@ -495,6 +554,7 @@ flowchart LR
     T2 -->|assigned to handle| M2
 
     M1 -->|has its own| TP1
+    M1 -->|has its own| F1
     M1 -->|has its own| KB1
     M2 -.->|falls back to| TP1
 ```
@@ -506,15 +566,16 @@ flowchart LR
 | **User** | Who? | Alice, Bob |
 | **Role** | What can they do (capability)? | Admin edits settings; Reviewer approves drafts; Member views/processes |
 | **Team** | What do they own (scope)? | Support team → support@; Sales team → sales@ |
-| **Mailbox** | Processing context | support@ has its own Topics, Knowledge, MCP tools |
-| **Topic** | Classification dictionary | urgent / meeting / inquiry / refund / lead … |
+| **Mailbox** | Processing context | support@ has its own Topics, custom Fields, Knowledge, MCP tools |
+| **Topic** | Classification dictionary (what an email is about) | refund / bug_report / password_reset / lead … |
+| **Field** | Per-mailbox custom ticket field | product_name, order_number, deal_value |
 
 **Key relationships (all many-to-many):**
 
 - **User ↔ Role**: one user can have multiple roles (Alice = Support Member + company Admin).
 - **User ↔ Team**: one user can belong to multiple teams.
 - **Team ↔ Mailbox**: one team can handle multiple mailboxes — **this defines access scope**.
-- **Mailbox ↔ Topic / Knowledge / MCP**: each mailbox owns its own classification dictionary, knowledge sources, and tools, with **global fallback**.
+- **Mailbox ↔ Topic / Field / Knowledge / MCP**: each mailbox owns its own classification dictionary, custom fields, knowledge sources, and tools, with **global fallback**.
 
 **Permission check for a single email:**
 
@@ -536,11 +597,13 @@ def can_access(email, user):
 | New mailbox | Must edit every user | Just assign to a team |
 | Real-world fit | Unrealistic | Matches reality (support only handles support@) |
 
-**Topics are mailbox-scoped** — they are the *classification dictionary* for a
-mailbox, not a user/team attribute. A support mailbox may define `refund` and
-`bug_report` topics; a sales mailbox defines `lead` and `proposal`. Teams
-consume the topics of the mailboxes they own, and only an **Admin** role can
-edit them.
+**Topics & Fields are mailbox-scoped.** Topics are the *classification
+dictionary* (what an email is about) for a mailbox, not a user/team attribute.
+A support mailbox may define `refund` and `bug_report` topics; a sales mailbox
+defines `lead` and `proposal`. **Fields** are custom ticket fields an admin adds
+to a specific mailbox (`product_name`, `deal_value`, …). Teams consume the
+topics/fields of the mailboxes they own, and only an **Admin** role can edit
+them.
 
 ### Page-to-Backend Data Flow
 
@@ -613,9 +676,10 @@ flowchart LR
 ```mermaid
 flowchart TB
     MA["Mail Accounts (list)"] -->|open| ACC["support@  details"]
+    ACC -->|sub-nav| TP["Topics"]
+    ACC -->|sub-nav| F["Custom Fields"]
     ACC -->|sub-nav| KB["Knowledge / RAG"]
     ACC -->|sub-nav| MCP["MCP Connectors"]
-    ACC -->|sub-nav| TP["Topics / Fields"]
     MA -->|open| ACC2["sales@  details"]
 ```
 
@@ -635,11 +699,16 @@ flowchart TB
 
 | Route (nested) | Module | Key fields |
 | --- | --- | --- |
+| `/settings/mail/{id}/topics` | **Topics** | classification dictionary: topic name, color, auto-reply strategy |
+| `/settings/mail/{id}/fields` | **Custom Fields** | dynamic ticket fields: label, key, type (text/dropdown/number/checkbox/date) |
 | `/settings/mail/{id}/knowledge` | **Knowledge / RAG** | vector store status, embedding provider/model, **Sources** table (PDF/MD/TXT/CSV), **Re-index** button |
 | `/settings/mail/{id}/mcp` | **MCP Connectors** | name, transport (`stdio`/`http`), command/args or URL, enabled toggle, **Test** handshake |
-| `/settings/mail/{id}/topics` | **Topics & Fields** | classification categories (color + auto-reply strategy); custom fields (label, key, type) |
 
 > Mailbox-scoped modules fall back to 🌐 global defaults when not configured.
+
+**Email (ticket) fields recap** — every email has standard fields
+(`status`, `priority`, `category`, `topic`) plus the mailbox's custom
+fields. See [Core Workflow & Classification](#core-workflow--classification).
 
 ### Implementation Pattern (NiceGUI)
 
@@ -684,13 +753,49 @@ def open_form(record=None) -> None:
 1. **Settings shell** — drawer group + `/settings` landing page (empty-state cards).
 2. **Mail Accounts** — CRUD; the anchor resource (mailbox-scoped configs hang off it).
 3. **AI Settings** (global) — read/write SQLite, wire into `create_llm()`, Test button.
-4. **Topics & Fields** (per-mailbox + global fallback) — CRUD, feed into classification task context.
+4. **Topics & Custom Fields** (per-mailbox + global fallback) — CRUD, feed into classification task context.
 5. **Roles / Users / Teams** — CRUD + many-to-many assignment (display-only auth for now).
 6. **Knowledge / RAG** (per-mailbox) — source table + re-index background task.
 7. **MCP Connectors** (per-mailbox) — CRUD + test handshake.
-8. **Primary additions** — My Cases (filters), Contacts, Reports (charts).
+8. **Emails table** — persist tickets with standard fields; wire Inbox/Cases to read/write.
+9. **Primary additions** — My Cases (filters), Contacts, Reports (charts).
 
-### Database Schema Sketch (`data/settings.db`)
+### Database Schema Sketch
+
+**Emails (tickets) — `data/emails.db`:**
+
+```sql
+CREATE TABLE emails (
+    id INTEGER PRIMARY KEY,
+    mail_account_id INTEGER REFERENCES mail_accounts(id),
+    sender TEXT NOT NULL,
+    subject TEXT,
+    body TEXT,
+    received_at TEXT,
+
+    -- standard ticket fields
+    status TEXT DEFAULT 'new',        -- new | open | pending | solved | closed
+    priority TEXT DEFAULT 'normal',   -- low | normal | high | urgent
+    category TEXT,                    -- question | incident | problem | task | spam
+    topic TEXT,                       -- what the email is about
+    urgency_score INTEGER,
+    summary TEXT,
+    requires_reply INTEGER DEFAULT 0,
+
+    draft_reply TEXT,                 -- AI-generated draft (approved by human)
+    sent_at TEXT                      -- when the approved draft was sent
+);
+
+-- Custom field values (per mailbox custom fields applied to a ticket)
+CREATE TABLE email_custom_field_values (
+    email_id INTEGER REFERENCES emails(id),
+    field_id INTEGER REFERENCES custom_fields(id),
+    value TEXT,
+    PRIMARY KEY (email_id, field_id)
+);
+```
+
+**Settings & config — `data/settings.db`:**
 
 ```sql
 CREATE TABLE settings (
@@ -720,7 +825,7 @@ CREATE TABLE mcp_connectors (
 
 CREATE TABLE topics (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL,          -- classification dictionary
     color TEXT, strategy TEXT,
     mail_account_id INTEGER REFERENCES mail_accounts(id),  -- NULL = global default
     enabled INTEGER DEFAULT 1,
@@ -730,7 +835,9 @@ CREATE TABLE topics (
 CREATE TABLE custom_fields (
     id INTEGER PRIMARY KEY,
     key TEXT NOT NULL,
-    label TEXT, type TEXT,
+    label TEXT,
+    type TEXT,                   -- text | textarea | dropdown | number | checkbox | date
+    options TEXT,                -- JSON list for 'dropdown' type
     mail_account_id INTEGER REFERENCES mail_accounts(id),  -- NULL = global default
     UNIQUE (key, mail_account_id)
 );
@@ -787,6 +894,8 @@ CREATE TABLE team_mailboxes (
 - ❌ Global module-level mutable state for settings (multi-user bug).
 - ❌ Attaching a Role directly to a User without a Team scope (breaks per-mailbox access).
 - ❌ Treating Topics / Knowledge as one global bucket (every mailbox needs its own).
+- ❌ Letting the LLM decide `status` (it's a workflow state, not an email attribute).
+- ❌ Conflating category / priority / topic into one field (they answer different questions).
 
 ---
 
@@ -797,23 +906,26 @@ CREATE TABLE team_mailboxes (
 * [x] YAML-based Agent & Task definitions (Classifier, Drafter)
 * [x] Pydantic structured output (`EmailClassification`) for classification task
 * [x] Optional `LOCAL_API_KEY` support for authenticated local proxies
-* [x] Decouple email fetching from AI agents (`email_fetcher.py`)
-* [x] File structure reorganization (`models.py`, `email_fetcher.py`)
+* [x] Decouple email fetching from AI agents (`core/email_fetcher.py`)
+* [x] File structure reorganization (`agents/`, `core/`, `models.py`)
 * [x] NiceGUI web interface (Dashboard / Inbox / Cases)
-* [ ] SQLite email store — persist fetched emails, classifications, and drafts
+* [x] Real IMAP email retrieval (`imap-tools`)
+* [ ] Email (ticket) data model — status / priority / category / topic + per-mailbox custom fields
+* [ ] SQLite email store — persist tickets and drafts
 * [ ] CrewAI long-term memory via SQLite (`memory=True`)
 * [ ] ChromaDB RAG integration — index past emails and FAQs
 * [ ] Embedding pipeline — chunk documents, generate embeddings, store in ChromaDB
 * [ ] MockEmailService — simulated inbox for offline testing
-* [ ] Real IMAP/SMTP tools for Gmail integration
+* [ ] SMTP sending — send approved drafts
 * [ ] MCP Server integration for local file access
 * [ ] **Settings & Admin resources** — see [UI & Admin Settings Plan](#ui--admin-settings-plan):
-  * [ ] AI Settings (provider, model, temperature, tokens)
-  * [ ] RAG / Knowledge base management
-  * [ ] MCP Connectors
   * [ ] Mail Accounts (IMAP/SMTP)
-  * [ ] Fields, Topics, Categories
-  * [ ] Roles, Users, Team
+  * [ ] AI Settings (provider, model, temperature, tokens)
+  * [ ] Topics (per-mailbox classification dictionary)
+  * [ ] Custom Fields (per-mailbox ticket fields)
+  * [ ] Knowledge / RAG base management
+  * [ ] MCP Connectors
+  * [ ] Roles, Users, Teams
 * [ ] Sidebar additions — My Cases, Contacts, Reports
 * [ ] Final FYP Report & Evaluation generation
 

@@ -1,31 +1,40 @@
 classify_email_task:
   description: >
-    Analyze the following email and classify it. Determine the primary intent,
-    assess the urgency on a scale of 1-10, write a one-sentence summary, and
-    decide whether a reply draft is needed.
+    Analyze the following email and classify it. Determine the category
+    (what kind of request it is), the topic (what the email is about), the
+    priority (how urgent it is), an urgency score from 1 to 10, a one-sentence
+    summary, and whether a reply draft is needed.
 
     Email content: {email_content}
 
-    Categories to choose from:
-    - urgent: requires immediate attention
-    - meeting: scheduling, invitations
-    - inquiry: questions, requests for information
-    - notification: automated system alerts
+    Categories (kind of request) to choose from:
+    - question: a question or request for information
+    - incident: a single occurrence of a problem
+    - problem: a larger issue affecting many
+    - task: an assignable action item
     - spam: unsolicited or promotional
+
+    Topic (what the email is about) is open-ended, for example:
+    refund, bug_report, password_reset, meeting, inquiry, notification, lead.
+
+    Priority (urgency): low, normal, high, or urgent.
   expected_output: >
     A structured classification object with:
-    - intent: one of urgent, meeting, inquiry, notification, spam
+    - category: one of question, incident, problem, task, spam
+    - topic: open-ended subject matter (what the email is about)
+    - priority: low, normal, high, or urgent
     - urgency_score: integer from 1 to 10
     - summary: one-sentence summary of the email
     - requires_reply: boolean
+    - custom: dictionary of per-mailbox custom field values (empty if none)
   agent: classifier
 
 draft_reply_task:
   description: >
-    Based on the classified email and its category from the previous task,
-    draft a professional reply email. Match the tone of the original sender
-    and address the email's intent. If the email does not require a reply,
-    output a brief note explaining why.
+    Based on the classified email and its category and topic from the previous
+    task, draft a professional reply email. Match the tone of the original
+    sender and address the email's topic. If the email does not require a
+    reply, output a brief note explaining why.
   expected_output: >
     A draft reply email with subject line and body text, written in
     professional English and formatted as plain text ready to send.

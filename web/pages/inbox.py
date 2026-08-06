@@ -44,11 +44,11 @@ def email_list() -> None:
         ):
             with ui.column().classes("w-full gap-2"):
                 with ui.row().classes("w-full items-center justify-between"):
-                    ui.label(f"**From:** {sender}  ·  📅 {timestamp}").classes(
-                        "text-sm text-grey-7"
-                    )
+                    with ui.row().classes("items-center gap-1 text-sm text-grey-7"):
+                        ui.icon("schedule", size="sm")
+                        ui.label(f"From: {sender}  ·  {timestamp}")
                     if processed:
-                        ui.badge("✅ Processed", color="positive").props("outline")
+                        ui.badge("Processed", color="positive").props("outline")
 
                 ui.separator()
                 ui.textarea(
@@ -57,12 +57,12 @@ def email_list() -> None:
 
                 with ui.row().classes("w-full justify-end"):
                     if processed:
-                        ui.button("✓ Done", icon="check", color="positive").props(
+                        ui.button("Done", icon="check", color="positive").props(
                             "flat disabled"
                         )
                     else:
                         ui.button(
-                            "✨ AI Process",
+                            "AI Process",
                             icon="auto_awesome",
                             color="primary",
                             on_click=lambda i=i: process_email(i),
@@ -82,9 +82,9 @@ def process_email(i: int) -> None:
                 inputs={"email_content": format_email(email)},
             )
             _results()[i] = result
-            ui.notify("✅ Email processed!", type="positive")
+            ui.notify("Email processed!", type="positive")
         except Exception as e:
-            ui.notify(f"❌ Processing failed: {e}", type="negative")
+            ui.notify(f"Processing failed: {e}", type="negative")
         finally:
             email_list.refresh()
 
@@ -101,14 +101,14 @@ def render() -> None:
 
     # Toolbar with per-page state (closure, not module globals)
     with ui.row().classes("w-full items-center justify-between"):
-        count_label = ui.label(f"**{len(_emails())}** emails loaded").classes(
+        count_label = ui.label(f"{len(_emails())} emails loaded").classes(
             "text-grey-7"
         )
         with ui.row().classes("items-center gap-2"):
             loading = ui.spinner(size="sm").classes("text-primary")
             loading.visible = False
             fetch_btn = ui.button(
-                "🔄 Fetch Emails",
+                "Fetch Emails",
                 icon="download",
                 color="primary",
             ).props("unelevated")
@@ -124,10 +124,10 @@ def render() -> None:
                 _emails().clear()
                 _emails().extend(emails)
                 _results().clear()
-                count_label.set_text(f"**{len(emails)}** emails loaded")
-                ui.notify(f"✅ Fetched {len(emails)} emails", type="positive")
+                count_label.set_text(f"{len(emails)} emails loaded")
+                ui.notify(f"Fetched {len(emails)} emails", type="positive")
             except Exception as e:
-                ui.notify(f"❌ Fetch failed: {e}", type="negative")
+                ui.notify(f"Fetch failed: {e}", type="negative")
             finally:
                 fetch_btn.enable()
                 fetch_btn.props(remove="loading")

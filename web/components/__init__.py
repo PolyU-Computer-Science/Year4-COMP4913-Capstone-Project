@@ -3,10 +3,10 @@
 from nicegui import ui
 
 CATEGORY_COLORS = {
-    "urgent": "negative",
-    "meeting": "info",
-    "inquiry": "warning",
-    "notification": "grey-6",
+    "question": "info",
+    "incident": "negative",
+    "problem": "warning",
+    "task": "positive",
     "spam": "grey-5",
 }
 

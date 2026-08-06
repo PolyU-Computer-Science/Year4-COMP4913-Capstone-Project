@@ -24,7 +24,7 @@ def render() -> None:
             ui.icon("folder_open", size="3rem").classes("text-grey-4")
             ui.label("No processed cases yet").classes("text-lg text-grey-6")
             ui.label(
-                "Go to **Inbox** and click **AI Process** on an email."
+                "Go to Inbox and click AI Process on an email."
             ).classes("text-sm text-grey-5")
         return
 
@@ -46,18 +46,22 @@ def render() -> None:
 
             with ui.grid(columns=2).classes("w-full gap-4"):
                 with ui.column().classes("gap-1"):
-                    ui.label("🤖 AI Draft Reply").classes(
-                        "text-sm font-semibold text-slate-800"
-                    )
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon("auto_awesome").classes("text-sm text-slate-800")
+                        ui.label("AI Draft Reply").classes(
+                            "text-sm font-semibold text-slate-800"
+                        )
                     draft = getattr(result, "raw", "") or str(result)
                     ui.textarea(value=draft).props(
                         "readonly outlined dense rows=10"
                     ).classes("w-full")
 
                 with ui.column().classes("gap-1"):
-                    ui.label("📋 Classification").classes(
-                        "text-sm font-semibold text-slate-800"
-                    )
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon("fact_check").classes("text-sm text-slate-800")
+                        ui.label("Classification").classes(
+                            "text-sm font-semibold text-slate-800"
+                        )
                     pydantic = getattr(result, "pydantic", None)
                     if pydantic is not None:
                         ui.json_editor(
