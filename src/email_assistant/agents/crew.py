@@ -16,8 +16,8 @@ class EmailAssistant:
     agents: list[BaseAgent]
     tasks: list[Task]
 
-    agents_config = "config/agents.yaml"
-    tasks_config = "config/tasks.yaml"
+    agents_config = "../config/agents.yaml"
+    tasks_config = "../config/tasks.yaml"
 
     @cached_property
     def configured_llm(self) -> BaseLLM:

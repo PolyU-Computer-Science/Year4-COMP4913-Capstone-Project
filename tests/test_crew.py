@@ -1,6 +1,6 @@
 from crewai.llms.providers.openai.completion import OpenAICompletion
 
-from email_assistant.crew import EmailAssistant
+from email_assistant.agents import EmailAssistant
 
 
 def test_agents_share_the_configured_llm_instance(monkeypatch) -> None:

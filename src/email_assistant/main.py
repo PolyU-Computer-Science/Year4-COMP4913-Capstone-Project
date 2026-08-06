@@ -2,8 +2,8 @@
 import sys
 import warnings
 
-from email_assistant.crew import EmailAssistant
-from email_assistant.email_fetcher import SAMPLE_EMAILS, fetch_emails, format_email
+from email_assistant.agents import EmailAssistant
+from email_assistant.core import SAMPLE_EMAILS, fetch_emails, format_email
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
