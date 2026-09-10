@@ -91,7 +91,7 @@ def test_from_env_reads_only_the_selected_provider(
     assert settings.model == expected_model
     assert settings.temperature == 0.2
     assert settings.timeout == 120
-    assert settings.max_tokens == 2000
+    assert settings.max_tokens == 8000
 
 
 def test_from_env_normalizes_provider_and_common_values() -> None:
@@ -280,3 +280,38 @@ def test_local_api_key_absent_is_still_valid() -> None:
     settings = LLMSettings.from_env(PROVIDER_ENVIRONMENTS["local"])
 
     assert settings.api_key is None
+
+
+def test_from_generic_builds_settings_from_flat_dict() -> None:
+    settings = LLMSettings.from_generic(
+        {
+            "provider": "local",
+            "model": "qwen3:8b",
+            "base_url": "http://localhost:11434/v1",
+            "temperature": "0.7",
+            "timeout": "45.5",
+            "max_tokens": "4096",
+        }
+    )
+
+    assert settings.provider is LLMProvider.LOCAL
+    assert settings.model == "qwen3:8b"
+    assert settings.temperature == 0.7
+    assert settings.timeout == 45.5
+    assert settings.max_tokens == 4096
+
+
+def test_from_generic_rejects_missing_provider() -> None:
+    with pytest.raises(LLMConfigurationError, match="provider"):
+        LLMSettings.from_generic({"model": "qwen3:8b"})
+
+
+def test_from_generic_rejects_provider_missing_api_key() -> None:
+    with pytest.raises(LLMConfigurationError, match="api_key"):
+        LLMSettings.from_generic(
+            {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "base_url": "https://api.openai.com/v1",
+            }
+        )

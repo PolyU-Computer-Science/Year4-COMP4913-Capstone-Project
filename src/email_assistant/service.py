@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import math
 import os
-from typing import Self
+from typing import Any, Self
 from urllib.parse import urlparse
 
 from crewai import LLM
@@ -43,7 +43,7 @@ class LLMSettings(BaseModel):
     api_key: SecretStr | None = None
     temperature: float = Field(default=0.2, ge=0, le=2)
     timeout: float = Field(default=120, gt=0)
-    max_tokens: int = Field(default=2000, gt=0)
+    max_tokens: int = Field(default=8000, gt=0)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
@@ -91,7 +91,7 @@ class LLMSettings(BaseModel):
         max_tokens = _read_int(
             source,
             "LLM_MAX_TOKENS",
-            default=2000,
+            default=8000,
             minimum=1,
         )
 
@@ -100,6 +100,55 @@ class LLMSettings(BaseModel):
             model=model,
             base_url=base_url,
             api_key=SecretStr(api_key_value) if api_key_value is not None else None,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )
+
+    @classmethod
+    def from_generic(cls, data: Mapping[str, Any]) -> Self:
+        """Build settings from a generic flat dict (e.g. the settings DB)."""
+
+        raw_provider = data.get("provider")
+        if raw_provider is None or not str(raw_provider).strip():
+            raise LLMConfigurationError("provider is required")
+        try:
+            provider = LLMProvider(str(raw_provider).strip().lower())
+        except ValueError as error:
+            supported = ", ".join(p.value for p in LLMProvider)
+            raise LLMConfigurationError(
+                f"provider must be one of: {supported}"
+            ) from error
+
+        model = str(data.get("model") or "").strip()
+        if not model:
+            raise LLMConfigurationError("model is required")
+
+        spec = _PROVIDER_SPECS[provider]
+        base_url = str(data.get("base_url") or "").strip() or None
+        api_key = str(data.get("api_key") or "").strip() or None
+
+        if spec.requires_base_url and base_url is None:
+            raise LLMConfigurationError("base_url is required")
+        if base_url is not None:
+            _validate_http_url(base_url, "base_url")
+        if spec.requires_api_key and api_key is None:
+            raise LLMConfigurationError("api_key is required")
+
+        try:
+            temperature = float(data.get("temperature", 0.2))
+            timeout = float(data.get("timeout", 120))
+            max_tokens = int(data.get("max_tokens", 8000))
+        except (TypeError, ValueError) as error:
+            raise LLMConfigurationError(
+                "temperature, timeout, and max_tokens must be numbers"
+            ) from error
+
+        return cls(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key=SecretStr(api_key) if api_key is not None else None,
             temperature=temperature,
             timeout=timeout,
             max_tokens=max_tokens,
@@ -192,6 +241,17 @@ def create_llm(settings: LLMSettings) -> BaseLLM:
         kwargs["api_key"] = settings.api_key.get_secret_value() if settings.api_key else "local"
 
     return LLM(**kwargs)  # type: ignore[arg-type,return-value]
+
+
+def load_llm_settings() -> LLMSettings:
+    """Resolve LLM settings, preferring the active DB config over env defaults."""
+
+    from email_assistant.core.settings_store import SettingsStore
+
+    config = SettingsStore().get_active_ai_config()
+    if config is not None:
+        return LLMSettings.from_generic(config)
+    return LLMSettings.from_env()
 
 
 def _read_provider(env: Mapping[str, str]) -> LLMProvider:
@@ -296,4 +356,5 @@ __all__ = [
     "LLMProvider",
     "LLMSettings",
     "create_llm",
+    "load_llm_settings",
 ]

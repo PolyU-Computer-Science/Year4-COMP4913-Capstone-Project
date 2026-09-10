@@ -7,12 +7,14 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
     "crewai[anthropic,google-genai,litellm,tools]>=1.15.9,<2.0.0",
     "imap-tools>=1.14.0",
-    "nicegui>=3.15.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "cryptography>=49.0.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["email_assistant*", "web*"]
+include = ["email_assistant*", "backend*"]
 
 [dependency-groups]
 dev = [
@@ -26,7 +28,7 @@ train = "email_assistant.main:train"
 replay = "email_assistant.main:replay"
 test = "email_assistant.main:test"
 run_with_trigger = "email_assistant.main:run_with_trigger"
-web = "web.main:main"
+api = "backend.app.main:run"
 
 [build-system]
 requires = ["setuptools>=68"]

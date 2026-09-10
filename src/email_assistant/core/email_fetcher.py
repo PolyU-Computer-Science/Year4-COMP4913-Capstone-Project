@@ -9,49 +9,6 @@ from dotenv import load_dotenv
 from imap_tools import AND, MailBox, MailMessage
 import os
 
-SAMPLE_EMAILS: list[dict[str, str]] = [
-    {
-        "sender": "sarah.chen@example.com",
-        "subject": "Meeting Request \u2014 Project Q3 Review",
-        "body": (
-            "Hi team,\n\n"
-            "I'd like to schedule a Q3 project review meeting next week. "
-            "Please let me know your availability for Tuesday or Wednesday "
-            "afternoon.\n\n"
-            "Best regards,\n"
-            "Sarah Chen"
-        ),
-        "timestamp": "2026-07-28T14:30:00Z",
-    },
-    {
-        "sender": "notifications@secureplatform.com",
-        "subject": "Action Required: Verify Your Account Email Address",
-        "body": (
-            "Hello,\n\n"
-            "We recently detected a login attempt from a new device. To ensure "
-            "the security of your account, please verify your email address by "
-            "clicking the link below.\n\n"
-            "This link will expire in 24 hours. If you did not attempt to log "
-            "in, please ignore this email or contact our support team "
-            "immediately.\n\n"
-            "Thank you for keeping your account secure.\n\n"
-            "Best regards,\n"
-            "Security Team"
-        ),
-        "timestamp": "2026-07-29T09:15:43Z",
-    },
-    {
-        "sender": "newsletter@dealsdaily.com",
-        "subject": "\U0001f525 70% OFF Everything \u2014 Limited Time!",
-        "body": (
-            "Don't miss out on our biggest sale of the year! "
-            "70% off storewide, plus free shipping on orders over $50. "
-            "Shop now at dealsdaily.com/sale."
-        ),
-        "timestamp": "2026-07-30T06:00:00Z",
-    },
-]
-
 
 def format_email(email: dict[str, str]) -> str:
     """Render a structured email dict into a plain-text block for the LLM."""
@@ -89,11 +46,11 @@ class EmailSettings:
         password = _get_str(source, "EMAIL_PASSWORD", "").strip()
 
         if enabled and not address:
-            print("WARNING: EMAIL_ENABLED=true but EMAIL_ADDRESS is not set. Falling back to sample data.")
+            print("WARNING: EMAIL_ENABLED=true but EMAIL_ADDRESS is not set.")
             enabled = False
 
         if enabled and not password:
-            print("WARNING: EMAIL_ENABLED=true but EMAIL_PASSWORD is not set. Falling back to sample data.")
+            print("WARNING: EMAIL_ENABLED=true but EMAIL_PASSWORD is not set.")
             enabled = False
 
         max_emails = 50
@@ -124,7 +81,7 @@ def _get_str(env: Mapping[str, str], name: str, default: str) -> str:
     return stripped or default
 
 
-def _convert_message(msg: MailMessage) -> dict[str, str]:
+def _convert_message(msg: MailMessage) -> dict:
     """Convert an imap_tools MailMessage to the internal email dict format."""
     from_dt = msg.date
     if from_dt:
@@ -134,11 +91,26 @@ def _convert_message(msg: MailMessage) -> dict[str, str]:
     else:
         timestamp = datetime.now(timezone.utc).isoformat()
 
+    inline_attachments = []
+    for att in msg.attachments:
+        cid = (att.content_id or "").strip().strip("<>").strip()
+        if cid and (att.content_type or "").startswith("image/"):
+            inline_attachments.append(
+                {
+                    "cid": cid,
+                    "content_type": att.content_type,
+                    "filename": att.filename or "",
+                    "data": att.payload,
+                }
+            )
+
     return {
         "sender": msg.from_,
         "subject": msg.subject or "(no subject)",
         "body": msg.text or msg.html or "",
+        "html": msg.html or "",
         "timestamp": timestamp,
+        "attachments": inline_attachments,
     }
 
 
@@ -169,24 +141,37 @@ def fetch_via_imap(settings: EmailSettings) -> list[dict[str, str]]:
         return emails
 
 
-def fetch_emails() -> list[dict[str, str]]:
-    """Fetch unread emails from the inbox via IMAP, falling back to sample data.
+def load_email_settings() -> EmailSettings:
+    """Resolve email settings, preferring an enabled DB mail account over env."""
+    from email_assistant.core.settings_store import SettingsStore
 
-    If EMAIL_ENABLED is true and valid credentials are configured, this
-    function connects to the IMAP server and retrieves unread emails.
-    Otherwise it returns the static SAMPLE_EMAILS for development and
-    testing.
+    account = SettingsStore().get_enabled_mail_account()
+    if account is None:
+        return EmailSettings.from_env()
+
+    return EmailSettings(
+        enabled=True,
+        server=str(account.get("imap_host") or "imap.gmail.com"),
+        port=int(account.get("imap_port") or 993),
+        address=str(account.get("address") or ""),
+        password=str(account.get("password") or ""),
+        folder=str(account.get("folder") or "INBOX"),
+        max_emails=int(account.get("max_emails") or 50),
+    )
+
+
+def fetch_emails() -> list[dict[str, str]]:
+    """Fetch unread emails from the inbox via IMAP.
+
+    If an enabled mail account is configured (settings DB) or EMAIL_ENABLED is
+    true with valid credentials, this function connects to the IMAP server and
+    retrieves unread emails, raising on connection/auth errors. Otherwise it
+    returns an empty list.
     """
-    settings = EmailSettings.from_env()
+    settings = load_email_settings()
 
     if settings.enabled and settings.address:
-        try:
-            emails = fetch_via_imap(settings)
-            if emails:
-                return emails
-        except Exception as e:
-            print(f"IMAP fetch failed: {e}")
-            print("Falling back to sample data.")
+        return fetch_via_imap(settings)
 
-    print("Using sample email data for development.")
-    return SAMPLE_EMAILS
+    print("No enabled mail account; no emails to fetch.")
+    return []

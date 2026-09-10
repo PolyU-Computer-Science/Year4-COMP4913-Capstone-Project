@@ -1,0 +1,400 @@
+"""API integration tests using FastAPI TestClient (no LLM network calls)."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.main import app
+from backend.app.store import store
+
+client = TestClient(app)
+
+SAMPLE_EMAIL = {
+    "sender": "sarah.chen@example.com",
+    "subject": "Meeting Request",
+    "body": "Hi team, can we schedule a meeting?",
+    "timestamp": "2026-07-28T14:30:00Z",
+}
+
+
+def _fake_kickoff(self, inputs=None, **kwargs):  # noqa: ANN001
+    classification = SimpleNamespace(
+        model_dump=lambda: {
+            "category": "question",
+            "topic": "meeting",
+            "priority": "normal",
+            "urgency_score": 3,
+            "summary": "A meeting request",
+            "custom": {},
+        }
+    )
+    return SimpleNamespace(pydantic=classification, raw="Draft reply text")
+
+
+@pytest.fixture(autouse=True)
+def _reset_store() -> None:
+    store.clear()
+    yield
+    store.clear()
+
+
+def _sync_sample(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Sync one sample email and return its id."""
+    import email_assistant.core
+
+    monkeypatch.setattr(
+        email_assistant.core, "fetch_emails", lambda: [SAMPLE_EMAIL]
+    )
+    response = client.post("/api/emails/sync")
+    assert response.status_code == 200
+    return [email["id"] for email in response.json()["emails"]]
+
+
+def test_health() -> None:
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_sync_emails_persists_and_dedupes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = _sync_sample(monkeypatch)
+    assert len(ids) == 1
+    assert ids[0]
+
+    first = client.get("/api/emails").json()
+    assert first["count"] == 1
+    assert first["emails"][0]["sender"] == "sarah.chen@example.com"
+
+    # Syncing again must not duplicate.
+    response = client.post("/api/emails/sync")
+    assert response.status_code == 200
+    assert response.json()["synced"] == 0
+    assert response.json()["count"] == 1
+
+
+def test_list_emails_is_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    _sync_sample(monkeypatch)
+
+    import email_assistant.core
+
+    called = {"n": 0}
+    original = email_assistant.core.fetch_emails
+
+    def counting_fetch():
+        called["n"] += 1
+        return original()
+
+    monkeypatch.setattr(email_assistant.core, "fetch_emails", counting_fetch)
+
+    response = client.get("/api/emails")
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert called["n"] == 0
+
+
+def test_process_email_returns_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    email_id = _sync_sample(monkeypatch)[0]
+
+    response = client.post(f"/api/emails/{email_id}/process")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["case"]["id"] == email_id
+    assert body["case"]["classification"]["category"] == "question"
+    assert body["case"]["draft"] == "Draft reply text"
+
+
+def test_process_missing_email_returns_404() -> None:
+    response = client.post("/api/emails/does-not-exist/process")
+    assert response.status_code == 404
+
+
+def test_process_all_processes_pending_emails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    _sync_sample(monkeypatch)
+    # Add a second pending email.
+    import email_assistant.core
+
+    monkeypatch.setattr(
+        email_assistant.core,
+        "fetch_emails",
+        lambda: [
+            {
+                "sender": "bob@example.com",
+                "subject": "Second email",
+                "body": "Another question",
+                "timestamp": "2026-07-29T10:00:00Z",
+            }
+        ],
+    )
+    client.post("/api/emails/sync")
+
+    response = client.post("/api/emails/process-all")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["queued"] == 2
+    assert body["processed"] == 2
+    assert body["failed"] == []
+
+    emails = client.get("/api/emails").json()["emails"]
+    assert all(email["status"] == "processed" for email in emails)
+
+    # A second run is a no-op (nothing pending).
+    again = client.post("/api/emails/process-all").json()
+    assert again["queued"] == 0
+    assert again["processed"] == 0
+
+
+def test_process_all_continues_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    _sync_sample(monkeypatch)
+    import email_assistant.core
+
+    monkeypatch.setattr(
+        email_assistant.core,
+        "fetch_emails",
+        lambda: [
+            {
+                "sender": "bob@example.com",
+                "subject": "Second email",
+                "body": "Another question",
+                "timestamp": "2026-07-29T10:00:00Z",
+            }
+        ],
+    )
+    client.post("/api/emails/sync")
+
+    calls = {"n": 0}
+
+    def flaky_kickoff(self, inputs=None, **kwargs):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("LLM down")
+        return _fake_kickoff(self, inputs=inputs, **kwargs)
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", flaky_kickoff)
+
+    body = client.post("/api/emails/process-all").json()
+    assert body["queued"] == 2
+    assert body["processed"] == 1
+    assert len(body["failed"]) == 1
+
+    emails = client.get("/api/emails").json()["emails"]
+    statuses = {email["id"]: email["status"] for email in emails}
+    # The failed email reverted to 'new' so it can be retried.
+    assert sorted(statuses.values()) == ["new", "processed"]
+
+
+def test_cases_and_stats_reflect_processed_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    email_id = _sync_sample(monkeypatch)[0]
+
+    client.post(f"/api/emails/{email_id}/process")
+
+    cases = client.get("/api/cases")
+    assert cases.status_code == 200
+    assert cases.json()["count"] == 1
+    assert cases.json()["cases"][0]["classification"]["category"] == "question"
+
+    stats = client.get("/api/stats")
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["processed"] == 1
+    assert body["category_distribution"][0]["name"] == "Question"
+    assert body["recent_activity"][0]["email"] == "Meeting Request"
+
+
+def test_stats_empty_store() -> None:
+    stats = client.get("/api/stats")
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["total_emails"] == 0
+    assert body["processed"] == 0
+    assert body["pending"] == 0
+    assert body["success_rate"] == 0.0
+    assert body["category_distribution"] == []
+
+
+def test_get_attachment_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import email_assistant.core
+
+    monkeypatch.setattr(
+        email_assistant.core,
+        "fetch_emails",
+        lambda: [
+            {
+                "sender": "sarah.chen@example.com",
+                "subject": "With image",
+                "body": "text",
+                "html": '<img src="cid:logo">',
+                "timestamp": "2026-07-28T14:30:00Z",
+                "attachments": [
+                    {
+                        "cid": "logo",
+                        "content_type": "image/png",
+                        "filename": "logo.png",
+                        "data": b"\x89PNG",
+                    }
+                ],
+            }
+        ],
+    )
+
+    response = client.post("/api/emails/sync")
+    assert response.status_code == 200
+    email_id = response.json()["emails"][0]["id"]
+    assert response.json()["emails"][0]["html"] == '<img src="cid:logo">'
+
+    image = client.get(f"/api/emails/{email_id}/attachments/logo")
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    assert image.content == b"\x89PNG"
+
+    missing = client.get(f"/api/emails/{email_id}/attachments/nope")
+    assert missing.status_code == 404
+
+
+def test_process_returns_422_when_classification_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crewai
+
+    monkeypatch.setattr(
+        crewai.Crew,
+        "kickoff",
+        lambda self, inputs=None, **kwargs: SimpleNamespace(
+            pydantic=None, raw=""
+        ),
+    )
+    email_id = _sync_sample(monkeypatch)[0]
+
+    response = client.post(f"/api/emails/{email_id}/process")
+    assert response.status_code == 422
+
+    # No garbage case should be persisted.
+    assert client.get("/api/cases").json()["count"] == 0
+
+
+def test_process_recovers_python_literal_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import crewai
+
+    raw = (
+        "category='spam' topic='phishing_alert' priority='low' "
+        "urgency_score=2 summary='A suspicious email' custom={}"
+    )
+    monkeypatch.setattr(
+        crewai.Crew,
+        "kickoff",
+        lambda self, inputs=None, **kwargs: SimpleNamespace(
+            pydantic=None,
+            raw="Draft reply text",
+            tasks_output=[SimpleNamespace(raw=raw)],
+        ),
+    )
+    email_id = _sync_sample(monkeypatch)[0]
+
+    response = client.post(f"/api/emails/{email_id}/process")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["case"]["classification"]["category"] == "spam"
+    assert body["case"]["classification"]["topic"] == "phishing_alert"
+    assert body["case"]["draft"] == "Draft reply text"
+
+
+def test_update_case_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    email_id = _sync_sample(monkeypatch)[0]
+    client.post(f"/api/emails/{email_id}/process")
+
+    response = client.patch(
+        f"/api/cases/{email_id}", json={"draft": "Edited draft"}
+    )
+    assert response.status_code == 200
+    assert response.json()["draft"] == "Edited draft"
+
+    missing = client.patch("/api/cases/nope", json={"draft": "x"})
+    assert missing.status_code == 404
+
+
+def test_send_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    email_id = _sync_sample(monkeypatch)[0]
+    client.post(f"/api/emails/{email_id}/process")
+
+    sent_calls: list[dict] = []
+    import email_assistant.core.email_sender as sender_module
+
+    monkeypatch.setattr(
+        sender_module,
+        "send_reply",
+        lambda account, to, subject, body: sent_calls.append(
+            {"to": to, "subject": subject, "body": body}
+        ),
+    )
+    import email_assistant.core.settings_store as settings_module
+
+    monkeypatch.setattr(
+        settings_module.SettingsStore,
+        "get_enabled_mail_account",
+        lambda self: {
+            "address": "support@example.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "password": "pw",
+        },
+    )
+
+    response = client.post(f"/api/cases/{email_id}/send")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sent_at"]
+    assert body["email"]["status"] == "sent"
+
+    assert len(sent_calls) == 1
+    assert sent_calls[0]["to"] == "sarah.chen@example.com"
+    assert sent_calls[0]["subject"] == "Meeting Request"
+
+
+def test_send_case_requires_mail_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    import crewai
+
+    monkeypatch.setattr(crewai.Crew, "kickoff", _fake_kickoff)
+    email_id = _sync_sample(monkeypatch)[0]
+    client.post(f"/api/emails/{email_id}/process")
+
+    import email_assistant.core.settings_store as settings_module
+
+    monkeypatch.setattr(
+        settings_module.SettingsStore,
+        "get_enabled_mail_account",
+        lambda self: None,
+    )
+
+    response = client.post(f"/api/cases/{email_id}/send")
+    assert response.status_code == 400

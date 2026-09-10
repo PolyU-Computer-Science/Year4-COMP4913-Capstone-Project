@@ -3,13 +3,18 @@ import sys
 import warnings
 
 from email_assistant.agents import EmailAssistant
-from email_assistant.core import SAMPLE_EMAILS, fetch_emails, format_email
+from email_assistant.core import fetch_emails, format_email
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
 
 def run():
-    emails = fetch_emails()
+    try:
+        emails = fetch_emails()
+    except Exception as e:
+        print(f"Error fetching emails: {e}")
+        return
+
     if not emails:
         print("No unread emails.")
         return
@@ -76,9 +81,7 @@ def run_with_trigger():
         raise Exception("Invalid JSON payload provided as argument")
 
     inputs = {
-        "email_content": trigger_payload.get(
-            "email_content", format_email(SAMPLE_EMAILS[0])
-        ),
+        "email_content": trigger_payload.get("email_content", ""),
     }
 
     try:

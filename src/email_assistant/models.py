@@ -11,7 +11,6 @@ class EmailClassification(BaseModel):
     priority: str = Field(description="low, normal, high, or urgent")
     urgency_score: int = Field(description="Urgency scale from 1 to 10")
     summary: str = Field(description="One-sentence summary of the email content")
-    requires_reply: bool = Field(description="Whether a reply draft is needed")
     custom: dict = Field(
         default_factory=dict,
         description="Per-mailbox custom field values",
