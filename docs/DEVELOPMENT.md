@@ -10,7 +10,7 @@ UI** (stored in `data/settings.db`, overriding env).
 Set `LLM_PROVIDER` to exactly one of `local`, `openai`, `openrouter`,
 `anthropic`, `groq`, `deepseek`, or `google`. Only the selected provider is
 validated, so local mode does not require remote API keys. The active
-provider/model can also be switched at runtime in **Settings → AI**.
+provider/model can also be switched at runtime in **System → AI Models**.
 
 ```dotenv
 # Provider & safety guardrails
@@ -23,6 +23,11 @@ LLM_MAX_TOKENS=2000
 LOCAL_BASE_URL=http://localhost:11434/v1
 LOCAL_MODEL=local-model
 # LOCAL_API_KEY=sk-...           # Optional: for authenticated proxies/middleware
+
+# OpenRouter (recommended runtime provider)
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=xiaomi/mimo-v2.5-pro
+# OPENROUTER_API_KEY=sk-or-v1-...
 
 # OpenAI Example
 # OPENAI_API_KEY=sk-...
@@ -37,14 +42,31 @@ LOCAL_MODEL=local-model
 # GOOGLE_API_KEY=...
 # GOOGLE_MODEL=gemini-2.0-flash
 
-# (also supported: openrouter, groq, deepseek — see .env.example)
+# (also supported: groq, deepseek — see .env.example)
 ```
+
+### Embeddings (Knowledge / RAG)
+
+```dotenv
+# hashing (offline, deterministic, tests) | openrouter | openai | ollama
+EMBEDDING_PROVIDER=hashing
+EMBEDDING_BASE_URL=
+EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+EMBEDDING_BATCH_SIZE=32
+```
+
+- `hashing` is a deterministic offline client used by tests/CI.
+- `openrouter` uses `OPENROUTER_API_KEY` + `EMBEDDING_MODEL`; a missing key
+  raises a configuration error (no silent fallback).
+- The embedding dimension is discovered from the first response, never
+  hardcoded. Changing provider/model/dimension marks existing indexes stale and
+  triggers a reindex (see `core/embeddings.py`).
 
 ### Email Configuration (IMAP)
 
-Set in `.env` for the default account, or manage multiple accounts at runtime
-in **Settings → Mail Accounts** (address, IMAP/SMTP host + port, folder, max
-emails, enable toggle). Gmail requires an App Password.
+Mailboxes are the primary unit — each mailbox owns its own IMAP/SMTP
+connection, topics, fields, knowledge, and connectors. Configure them in
+**Mailboxes → Connection**, or use `.env` for a single legacy account.
 
 ```dotenv
 EMAIL_ENABLED=false
@@ -77,25 +99,24 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```dotenv
 SQLITE_SETTINGS_DB=data/settings.db
 # SQLITE_EMAIL_DB=data/emails.db          (default shown)
+# KNOWLEDGE_DB=data/knowledge.db
+# OBSERVABILITY_DB=data/observability.db
 # SETTINGS_ENCRYPTION_KEY=...             # Optional Fernet key; auto-generated to data/.secret_key
-
-# Embeddings (planned RAG)
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_BASE_URL=http://localhost:11434
-EMBEDDING_MODEL=qwen3-embedding-4b
 ```
 
-All state is persisted in two SQLite databases (auto-created on first run):
+All state is persisted in SQLite (auto-created on first run):
 
 | Database | File | Contents |
 | --- | --- | --- |
-| **Email Store** | `data/emails.db` | Emails as tickets (sender, subject, body, classification fields, draft, sent timestamp) + inline attachments. IDs are content-hashed for dedupe. |
-| **Settings Store** | `data/settings.db` | AI configs (single-active model, per-stage overrides), stage settings, mail accounts (IMAP/SMTP). |
+| **Email Store** | `data/emails.db` | Emails as tickets (sender, subject, body, classification fields, draft, sent timestamp, mailbox_id) + attachments + case field values + draft knowledge provenance. IDs are content-hashed with mailbox scope for dedupe. |
+| **Settings Store** | `data/settings.db` | AI configs, stage settings, mailboxes, topics, custom fields, knowledge sources, connectors, tool permissions. |
+| **Knowledge Store** | `data/knowledge.db` | Indexed knowledge documents + chunks (embedding vectors as JSON, mailbox-scoped). |
+| **Observability Store** | `data/observability.db` | Processing runs (latency/tokens/status) + tool audit logs. |
 
 **Secret handling:** API keys and mail passwords are encrypted at rest with
 **Fernet** (`cryptography`). The key comes from `SETTINGS_ENCRYPTION_KEY` or is
 auto-generated to `data/.secret_key`. Secrets are always masked in API
-responses (`has_api_key` / `has_password` booleans).
+responses and redacted in tool audit logs.
 
 ---
 
@@ -103,11 +124,15 @@ responses (`has_api_key` / `has_password` booleans).
 
 ### Web UI (primary workflow)
 
-1. **Settings → Mail Accounts** — add your IMAP/SMTP account (folder must be a valid IMAP mailbox name, e.g. `INBOX`).
-2. **Settings → AI** — configure an LLM provider (use *Test Connection* to verify), then activate it.
-3. **Inbox → Sync** — pull unread emails via IMAP into the ticket store.
-4. **Inbox → Process** — run the Classifier → Drafter pipeline on an email.
-5. **Cases** — review the classification and draft, edit if needed, then **Send** via SMTP.
+1. **Mailboxes → Add Mailbox** — create a business context (name, address, purpose).
+2. **Mailbox → Connection** — configure IMAP/SMTP, then *Test Connection*.
+3. **System → AI Models** — configure an LLM provider (use *Test Connection*), then activate it.
+4. **Mailbox → Topics / Fields** — define the mailbox's taxonomy and custom fields.
+5. **Mailbox → Knowledge** — add a source, *Index* it, then *Test Retrieval*.
+6. **Mailbox → Connectors** — discover tools and set permissions (default deny).
+7. **Inbox → Sync** — pull unread emails via IMAP into the ticket store.
+8. **Inbox → Process** — run Classifier → Retrieval → Drafter on an email.
+9. **Cases** — review the classification, fields, knowledge provenance and draft; edit if needed, then *Approve & Send*.
 
 ### CLI Mode
 
@@ -120,6 +145,19 @@ classification result is validated against the `EmailClassification` Pydantic
 model, and the final draft is written to `draft_reply.txt` (git-ignored runtime
 artifact).
 
+### Evaluation
+
+```bash
+# Regenerate the synthetic evaluation datasets (seeded, deterministic).
+uv run python -m evaluation.generator
+
+# Run a real evaluation against OpenRouter (consumes credit).
+uv run python -m scripts.run_evaluation --limit 20 --experiments cls,ret,fe,draft
+```
+
+See `evaluation/README.md` for dataset methodology and `evaluation/results/`
+(git-ignored) for raw runs.
+
 ---
 
 ## Development
@@ -127,17 +165,24 @@ artifact).
 ### Run Tests
 
 ```bash
-uv run pytest            # 111 tests (core + backend API), no real API calls required
+uv run pytest            # 280 tests (core + backend API), no real API calls required
 ```
 
 ### Lint & Format
 
 ```bash
+# Frontend (uses oxlint)
+cd frontend && npm run lint
+
+# Python (ruff, if installed)
 uv run ruff check .
 uv run ruff format .
+```
 
-# Frontend
-cd frontend && npm run lint
+### Typecheck & Build (frontend)
+
+```bash
+cd frontend && npm run build   # tsc -b && vite build
 ```
 
 ### Dependency Management
