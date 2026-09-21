@@ -8,3 +8,6 @@ draft_reply.txt
 .claude/
 *.egg-info/
 data/
+
+# Evaluation results (raw runs may contain model outputs)
+evaluation/results/

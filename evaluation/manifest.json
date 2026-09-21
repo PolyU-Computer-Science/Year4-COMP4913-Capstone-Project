@@ -1,0 +1,60 @@
+{
+  "dataset_version": "1.0",
+  "created_at": "2026-09-21",
+  "purpose": "FYP evaluation",
+  "generation": {
+    "type": "synthetic-controlled",
+    "ground_truth": "scenario-defined",
+    "seed": 20260921,
+    "generator": "evaluation/generator.py"
+  },
+  "mailboxes": ["support", "sales", "mtr_enquiries"],
+  "splits": {
+    "dev_ratio": 0.2,
+    "test_ratio": 0.8,
+    "method": "deterministic-random-shuffle"
+  },
+  "datasets": {
+    "classification": {
+      "count": 400,
+      "dev": 80,
+      "test": 320,
+      "description": "Category + topic classification with hard examples"
+    },
+    "field_extraction": {
+      "count": 200,
+      "dev": 40,
+      "test": 160,
+      "description": "Typed custom-field extraction incl. missing/invalid/ambiguous"
+    },
+    "retrieval": {
+      "count": 120,
+      "dev": 24,
+      "test": 96,
+      "description": "Mailbox-scoped retrieval with ~20% unanswerable"
+    },
+    "drafting": {
+      "count": 100,
+      "dev": 20,
+      "test": 80,
+      "description": "RAG drafting with required/forbidden facts"
+    },
+    "safety": {
+      "count": 80,
+      "dev": 16,
+      "test": 64,
+      "description": "Prompt injection, cross-mailbox, tool, auto-send"
+    },
+    "tool_planning": {
+      "count": 50,
+      "dev": 10,
+      "test": 40,
+      "description": "MCP tool selection and argument planning"
+    }
+  },
+  "constraints": {
+    "no_real_personal_data": true,
+    "no_credentials": true,
+    "model_not_used_for_labels": "xiaomi/mimo-v2.5-pro is excluded from ground-truth generation"
+  }
+}
