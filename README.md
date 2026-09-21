@@ -418,8 +418,60 @@ Evaluation will use RAG-specific metrics such as `context_precision`,
 
 ## Preliminary / Final Results
 
-Evaluation is in progress. Results will be reported here once experiments are
-complete.
+The evaluation harness (`evaluation/`) runs real experiments against the frozen
+test split using OpenRouter (`xiaomi/mimo-v2.5-pro` for classification and
+drafting, `qwen/qwen3-embedding-8b` for retrieval). The results below are a
+**preliminary sample** (20 test records per experiment) and are reproduced with
+`scripts/run_evaluation.py`; raw per-record results are written under
+`evaluation/results/` (git-ignored).
+
+### Classification (Support mailbox)
+
+| Metric | Value |
+| --- | --- |
+| Category accuracy | 0.00 |
+| Topic accuracy | 0.90 |
+| Topic resolution rate | 0.90 |
+
+**Finding:** MiMo's out-of-box category output is not constrained to the
+predefined enum (question/incident/problem/task/spam) — it emits free-form
+labels such as "Technical Support" or "Customer Inquiry". This directly
+motivates the structured-output validation + tolerant fallback parser in the
+classification pipeline (RQ2). Topic extraction and resolution, by contrast,
+are strong (0.90).
+
+### Custom-field extraction (Support mailbox)
+
+| Field | Accuracy |
+| --- | --- |
+| `order_id` | 1.00 |
+| `severity` | 1.00 |
+| `product` | 0.00 |
+| Exact match (all fields) | 0.65 |
+
+### Knowledge retrieval (Support mailbox)
+
+| Metric | Value |
+| --- | --- |
+| Recall@1 | 1.00 |
+| Recall@3 | 1.00 |
+| Recall@5 | 1.00 |
+| MRR | 0.75 |
+
+### Drafting (RAG, Support mailbox)
+
+| Metric | Value |
+| --- | --- |
+| Required-fact coverage | 0.00 (substring match) |
+| Unsupported-claim rate | 0.00 |
+
+The drafting coverage metric uses strict substring matching and does not yet
+reward paraphrases; this is a known limitation of the current automated proxy
+and will be replaced with a faithfulness rubric for the final report.
+
+> These are preliminary sample results, not a full run. The full test split is
+> 320 / 160 / 96 / 80 records for classification / field-extraction /
+> retrieval / drafting respectively.
 
 ---
 
