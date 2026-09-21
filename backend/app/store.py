@@ -89,6 +89,10 @@ class CaseStore:
     def set_case_field_values(self, case_id: str, values: dict[int, str]) -> None:
         self._db.set_case_field_values(case_id, values)
 
+    def fill_ai_case_field_values(self, case_id: str, values: dict[int, str]) -> None:
+        """Fill AI-extracted values only into empty fields (protects manual)."""
+        self._db.set_ai_case_field_values(case_id, values)
+
     def clear(self) -> None:
         """Reset the store (used by tests)."""
         self._db.clear()

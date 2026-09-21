@@ -201,6 +201,34 @@ def process_email(email_id: str) -> ProcessResponse:
         store.mark_failed(email_id)
         raise HTTPException(status_code=404, detail="Email not found")
 
+    # 3. AI field extraction (structured, mailbox-scoped, partial success).
+    if context and context.active_fields:
+        from email_assistant.core.extraction import ClassificationExtractionClient
+        from email_assistant.core.extraction_service import (
+            ExtractionService,
+            outcome_to_values_json,
+        )
+
+        client = ClassificationExtractionClient(
+            classification.topic, classification.custom
+        )
+        extraction_service = ExtractionService(client)
+        try:
+            with observer.run(
+                stage="field_extraction",
+                mailbox_id=email.mailbox_id,
+                email_id=email_id,
+                trace_id=trace_id,
+            ):
+                outcome = extraction_service.extract(
+                    content, context.topics, context.active_fields
+                )
+            values = outcome_to_values_json(outcome)
+            if values:
+                store.fill_ai_case_field_values(email_id, values)
+        except Exception:  # noqa: BLE001 - extraction failure must not block
+            pass
+
     # Record retrieval provenance on the run for observability/debugging.
     if knowledge_refs:
         try:

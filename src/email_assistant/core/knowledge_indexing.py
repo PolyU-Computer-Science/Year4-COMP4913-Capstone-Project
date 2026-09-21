@@ -58,7 +58,19 @@ class KnowledgeIndexService:
         existing = self._store.get_document_by_external_id(
             mailbox_id, int(source["id"]), external_id
         )
-        if existing is not None and existing.get("content_hash") == new_hash and not force:
+        # Skip only when BOTH content and embedding identity are unchanged.
+        embedding_unchanged = (
+            existing is not None
+            and existing.get("embedding_provider") == self._embedding.provider
+            and existing.get("embedding_model") == self._embedding.model
+            and int(existing.get("embedding_dim") or 0) == self._embedding.dim
+        )
+        if (
+            existing is not None
+            and existing.get("content_hash") == new_hash
+            and embedding_unchanged
+            and not force
+        ):
             self._store.mark_document_indexed(existing["id"])
             return {
                 "status": "indexed",
@@ -88,7 +100,7 @@ class KnowledgeIndexService:
                 "document_id": None,
             }
 
-        # Upsert the document.
+        # Upsert the document (with embedding identity).
         document_id = self._store.upsert_document(
             {
                 "mailbox_id": mailbox_id,
@@ -96,6 +108,9 @@ class KnowledgeIndexService:
                 "external_id": external_id,
                 "title": title or str(source.get("name", "")),
                 "content_hash": new_hash,
+                "embedding_provider": self._embedding.provider,
+                "embedding_model": self._embedding.model,
+                "embedding_dim": self._embedding.dim,
                 "status": "indexed",
             }
         )
@@ -107,8 +122,8 @@ class KnowledgeIndexService:
                 "content": c.content,
                 "token_count": c.token_count,
                 "embedding": embeddings[c.index],
-                "embedding_provider": "hashing",
-                "embedding_model": "hashing",
+                "embedding_provider": self._embedding.provider,
+                "embedding_model": self._embedding.model,
                 "embedding_dim": self._embedding.dim,
                 "metadata": c.metadata,
             }

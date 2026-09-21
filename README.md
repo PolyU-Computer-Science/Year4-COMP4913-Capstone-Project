@@ -31,28 +31,35 @@ Generation (RAG).
 4. [Key Contributions](#key-contributions)
 5. [System Architecture](#system-architecture)
 6. [Why This Architecture?](#why-this-architecture)
-7. [Agentic Workflow](#agentic-workflow)
-8. [Safety & Threat Model](#safety--threat-model)
-9. [Evaluation Methodology](#evaluation-methodology)
-10. [Preliminary / Final Results](#preliminary--final-results)
-11. [Current Implementation Status](#current-implementation-status)
-12. [Quick Start](#quick-start)
-13. [Project Structure](#project-structure)
-14. [Limitations](#limitations)
-15. [Roadmap](#roadmap)
-16. [References](#references)
+7. [Multi-Mailbox Context Model](#multi-mailbox-context-model)
+8. [Agentic Workflow](#agentic-workflow)
+9. [Safety & Threat Model](#safety--threat-model)
+10. [Evaluation Methodology](#evaluation-methodology)
+11. [Preliminary / Final Results](#preliminary--final-results)
+12. [Current Implementation Status](#current-implementation-status)
+13. [Quick Start](#quick-start)
+14. [Project Structure](#project-structure)
+15. [Limitations](#limitations)
+16. [Roadmap](#roadmap)
+17. [References](#references)
 
 ---
 
 ## Project Overview
 
-This project builds an **agentic AI email assistant** that separates
-deterministic software operations from probabilistic LLM reasoning:
+This project builds a **multi-mailbox agentic AI email assistant** that
+separates deterministic software operations from probabilistic LLM reasoning.
+Each **mailbox is an isolated business context** — with its own topics, custom
+fields, knowledge base, connectors, and AI behaviour — so the same engine
+serves Support, Sales, HR, etc. without cross-context leakage.
 
-- **Python Fetcher (`core/email_fetcher.py`):** Deterministic IMAP email retrieval via `imap-tools` — no LLM tokens spent on mechanical operations.
-- **CrewAI Engine:** Staged LLM reasoning (Classifier → Drafter) in a sequential pipeline with Pydantic-validated structured outputs.
+- **Python Fetcher (`core/email_fetcher.py`):** Deterministic per-mailbox IMAP retrieval via `imap-tools` — no LLM tokens spent on mechanical operations.
+- **CrewAI Engine:** Staged LLM reasoning (Classifier → Drafter) with Pydantic-validated structured outputs.
+- **Knowledge / RAG:** Mailbox-scoped indexing, chunking, embeddings, and retrieval that grounds the drafter.
+- **MCP Runtime:** Connector tool discovery with default-deny permissions and audit logging.
 - **FastAPI Backend (`backend/app/`):** REST API for email sync, AI processing, case management, and runtime settings — all state persisted in SQLite.
 - **React Frontend (`frontend/`):** Human-in-the-Loop UI for reviewing, editing, approving, and sending AI-generated drafts.
+- **Observability:** Per-stage processing runs recording latency, token usage, and failures.
 
 ### Research Focus
 
@@ -137,16 +144,25 @@ The main contributions of this project are:
 
 - A **hybrid deterministic–agentic architecture** separating mechanical email
   operations from LLM reasoning.
+- A **multi-mailbox context model** where each mailbox is an isolated business
+  context (topics, custom fields, knowledge, connectors, AI behaviour), enforced
+  at the data, retrieval, tool, and observability layers.
 - A **staged Classifier → Drafter workflow** with independently configurable
   LLM settings.
 - **Schema-validated classification** using Pydantic with fallback handling
   for non-standard local-model outputs.
+- **AI topic + custom-field extraction** with server-side validation and
+  partial-success handling; manual values are protected from AI overwrites.
+- **Retrieval-Augmented Generation** grounded in mailbox-scoped, indexed
+  knowledge with provenance tracking and injection-safe prompts.
+- **MCP tool permissions** with default-deny enforcement and audit logging.
 - A **Human-in-the-Loop approval workflow** that separates AI-generated drafts
   from external email actions.
 - **Runtime-selectable local and hosted LLM providers.**
 - **Encrypted persistence** of email and AI configuration.
-- An **evaluation framework** for classification, structured-output
-  reliability, RAG quality, model latency, and safety.
+- An **observability layer** (per-stage latency and token usage) and an
+  **evaluation framework** for classification, structured-output reliability,
+  RAG quality, model latency, and safety.
 
 ---
 
@@ -158,43 +174,52 @@ flowchart TB
         Dashboard["Dashboard"]
         Inbox["Inbox & Review"]
         Cases["Cases & Drafts"]
-        Settings["Settings<br/>(AI / Mail Accounts / Stages)"]
+        Mailboxes["Mailboxes<br/>(Topics / Fields / Knowledge / Connectors)"]
     end
 
     subgraph API["FastAPI Backend (backend/app)"]
-        Routers["REST API Routers<br/>(emails / cases / stats / settings)"]
+        Routers["REST API Routers<br/>(emails / cases / mailboxes / knowledge / connectors / observability)"]
         Store[("CaseStore<br/>(SQLite)")]
     end
 
     subgraph Core["Core Engine (src/email_assistant)"]
-        Fetcher["Email Fetcher<br/>(IMAP, imap-tools)"]
+        Fetcher["Email Fetcher<br/>(IMAP, per-mailbox)"]
         Crew["CrewAI Pipeline<br/>Classifier --> Drafter"]
+        RAG["Knowledge Retrieval<br/>(mailbox-scoped)"]
+        MCP["MCP Runtime<br/>(permissions + audit)"]
         Sender["Email Sender<br/>(SMTP)"]
     end
 
     subgraph Data["Persistence"]
         EmailsDB[("data/emails.db")]
         SettingsDB[("data/settings.db<br/>(Fernet-encrypted secrets)")]
+        KnowledgeDB[("data/knowledge.db<br/>(documents + chunks)")]
+        ObsDB[("data/observability.db<br/>(runs + audit)")]
     end
 
     UI -->|HTTP /api| Routers
     Routers --> Fetcher
     Routers --> Crew
+    Routers --> RAG
+    Routers --> MCP
     Routers --> Sender
     Routers --> Store
     Store --> EmailsDB
     SettingsDB -.->|LLM & mail config| Core
+    RAG --> KnowledgeDB
+    MCP --> ObsDB
     Fetcher -.-> IMAP["IMAP Server"]
     Sender -.-> SMTP["SMTP Server"]
 ```
 
 ### How Data Flows
 
-1. **Sync** — the backend triggers the deterministic fetcher, which pulls
-   unread emails via IMAP and stores them as deduplicated tickets in SQLite.
-2. **Process** — the staged LLM pipeline (Classifier → Drafter) runs on a
-   stored email; classification is validated against a Pydantic model (with a
-   tolerant fallback parser for local models).
+1. **Sync** — the backend triggers the deterministic per-mailbox fetcher, which
+   pulls unread emails via IMAP and stores them as deduplicated tickets tagged
+   with `mailbox_id`.
+2. **Process** — the staged pipeline runs mailbox-scoped: the Classifier uses
+   the mailbox's topics; knowledge is retrieved from the mailbox's own index;
+   the Drafter grounds its reply in that context.
 3. **Review & Send** — the human edits/approves the draft in the UI, then the
    backend sends it via SMTP using the enabled mail account.
 
@@ -239,6 +264,27 @@ deterministic (SMTP send, after human gate)
 
 ---
 
+## Multi-Mailbox Context Model
+
+A mailbox is an **isolated business context**, not just an email account. Each
+mailbox owns its own taxonomy and grounding, and `mailbox_id` is enforced as a
+hard boundary at every layer:
+
+```text
+Mailbox
+  ├── Topics        → constrain the classifier (resolve + validate)
+  ├── Custom Fields → typed, validated, partial-success extraction
+  ├── Knowledge     → mailbox-scoped indexing + retrieval (RAG)
+  ├── Connectors    → default-deny tool permissions + audit
+  └── AI Behaviour  → per-stage model / temperature / instructions
+```
+
+This means a Support mailbox sees only Support topics, retrieves only Support
+knowledge, and can only invoke tools permitted to Support — verified by
+cross-mailbox isolation tests.
+
+---
+
 ## Agentic Workflow
 
 The email processing pipeline consists of a deterministic fetch layer followed
@@ -262,7 +308,7 @@ This keeps LLM calls focused purely on reasoning tasks.
 | Stage | Task | Goal | Tools |
 | --- | --- | --- | --- |
 | **Classifier** | `classify_email_task` | Determine category (question/incident/problem/task/spam), topic, priority, urgency, and summary. | None (LLM reasoning) |
-| **Drafter** | `draft_reply_task` | Generate context-aware reply drafts matching professional tone. | (RAG/MCP planned) |
+| **Drafter** | `draft_reply_task` | Generate context-aware reply drafts matching professional tone, grounded in retrieved knowledge. | RAG knowledge context |
 
 Each stage gets its own LLM instance with **per-stage overrides** (temperature,
 max tokens, even role/backstory) stored in the settings DB — YAML config in
@@ -320,17 +366,21 @@ The **category** field is kept small and stable:
 
 ## Safety & Threat Model
 
-Incoming emails and retrieved documents are treated as **untrusted input**.
+Incoming emails, retrieved knowledge documents, and tool results are treated as
+**untrusted input**. Each mailbox is a hard security boundary.
 
 ### Main Risks
 
 | Risk | Mitigation |
 |---|---|
 | Prompt injection in email content | Email text is treated as data, not trusted system instructions |
+| Prompt injection in knowledge / tool results | Knowledge and tool output are wrapped as data, not instructions |
 | Hallucinated classification | Structured schema validation |
-| Hallucinated reply content | Human review; planned RAG grounding |
-| Excessive agent authority | AI cannot directly send email |
-| Credential disclosure | Secrets encrypted at rest and masked in API responses |
+| Hallucinated topic / field values | Topic resolution + server-side field validation (partial success) |
+| Hallucinated reply content | Human review + RAG grounding with provenance |
+| Excessive agent authority | AI cannot directly send email; MCP tools default-deny |
+| Cross-mailbox data leakage | `mailbox_id` enforced across emails, cases, knowledge, connectors, runs |
+| Credential disclosure | Secrets encrypted at rest, masked in API responses, redacted in audit |
 | Runaway model execution | Token limits and request timeouts |
 | External-model privacy | Provider is configurable; local models are supported |
 
@@ -377,15 +427,23 @@ complete.
 
 | Component | Status | Evaluation |
 | --- | --- | --- |
-| IMAP email retrieval | ✅ Implemented | Unit / integration tested |
+| IMAP email retrieval (per-mailbox) | ✅ Implemented | Unit / integration tested |
+| Multi-mailbox isolation | ✅ Implemented | Cross-mailbox isolation tested |
 | Email classification | ✅ Implemented | 🔄 Evaluation pending |
 | Structured output | ✅ Implemented | 🔄 Comparative evaluation pending |
-| Draft generation | ✅ Implemented | 🔄 Evaluation pending |
+| Topic resolution | ✅ Implemented | Unit tested |
+| Custom fields (typed + validated) | ✅ Implemented | Unit tested |
+| AI field extraction (partial success) | ✅ Implemented | Unit tested |
+| Knowledge indexing / chunking | ✅ Implemented | Unit tested |
+| Knowledge retrieval (mailbox-scoped) | ✅ Implemented | 🔄 Benchmark pending |
+| RAG → Drafter | ✅ Implemented | 🔄 Evaluation pending |
 | Human approval | ✅ Implemented | 🔄 Safety testing pending |
 | SMTP delivery | ✅ Implemented | Integration tested |
-| RAG | 🚧 Planned / In Development | Not evaluated |
+| MCP permissions / audit | ✅ Implemented | Unit tested |
+| Real MCP transport | 📋 Planned | Not implemented |
+| Observability (runs / latency / tokens) | ✅ Implemented | Unit tested |
+| Real semantic embedding provider | 📋 Planned | Hashing provider used for tests |
 | Long-term memory | 📋 Planned | Not evaluated |
-| MCP | 📋 Planned | Not evaluated |
 
 ---
 
@@ -433,7 +491,7 @@ Open `http://localhost:5173`.
 ### Run Tests
 
 ```bash
-uv run pytest            # 111 tests (core + backend API), no real API calls required
+uv run pytest            # 194 tests (core + backend API), no real API calls required
 ```
 
 For the full configuration reference, API reference, and development workflow,
@@ -461,7 +519,11 @@ email_assistant/
 │   │   ├── store.py                # CaseStore wrapper over the email database
 │   │   └── routers/
 │   │       ├── emails.py           # Sync (IMAP fetch) + AI process endpoints
-│   │       ├── cases.py            # Case listing, draft editing, SMTP send
+│   │       ├── cases.py            # Case listing, draft editing, field values, SMTP send
+│   │       ├── mailboxes.py        # Mailboxes / topics / fields / knowledge / connectors
+│   │       ├── knowledge.py        # Knowledge indexing + retrieval endpoints
+│   │       ├── connectors.py       # MCP discovery / permissions / audit
+│   │       ├── observability.py    # Processing runs + stats
 │   │       ├── stats.py            # Dashboard statistics
 │   │       └── settings.py         # AI configs / stage settings / mail accounts CRUD
 │   └── tests/                      # FastAPI API tests (TestClient, temp DBs)
@@ -470,13 +532,14 @@ email_assistant/
 │   ├── vite.config.ts              # Dev server + /api proxy to backend
 │   └── src/
 │       ├── App.tsx                 # Route registration
-│       ├── components/             # Sidebar, stat cards, badges, email body renderer
+│       ├── components/             # Sidebar, header, badges, case fields, empty state
 │       ├── lib/                    # API client, shared types
 │       └── pages/
 │           ├── dashboard.tsx       # Stats + category chart + recent activity
-│           ├── inbox.tsx           # Email list, sync, AI process
-│           ├── cases.tsx           # Draft review / edit / send
-│           └── settings/           # ai.tsx, mail.tsx
+│           ├── inbox.tsx           # Email list (master-detail), sync, AI process
+│           ├── cases.tsx           # Cases table + case detail (draft / fields)
+│           ├── mailboxes/          # Mailbox list, add, detail tabs
+│           └── settings/           # ai-models.tsx, general.tsx
 ├── tests/                          # Core unit tests (fetcher, database, parser, …)
 └── src/
     └── email_assistant/
@@ -486,11 +549,26 @@ email_assistant/
         ├── agents/
         │   └── crew.py             # @CrewBase: Classifier & Drafter + tasks
         ├── core/
-        │   ├── email_fetcher.py    # Deterministic IMAP retrieval (imap-tools)
+        │   ├── email_fetcher.py    # Deterministic per-mailbox IMAP retrieval
         │   ├── email_sender.py     # SMTP sending (SSL / STARTTLS)
-        │   ├── email_service.py    # CLI-side fetch+process orchestration
-        │   ├── database.py         # SQLite email store (tickets, attachments)
+        │   ├── database.py         # SQLite email store (tickets, field values)
         │   ├── settings_store.py   # SQLite settings store (encrypted secrets)
+        │   ├── mailbox_context.py  # MailboxRuntimeContext service
+        │   ├── topics.py           # Topic resolution + validation
+        │   ├── field_validation.py # Custom field value validation
+        │   ├── extraction.py       # AI extraction client abstraction
+        │   ├── extraction_service.py # Topic + field extraction (partial success)
+        │   ├── chunking.py         # Knowledge chunking
+        │   ├── embeddings.py       # Embedding client abstraction + compat
+        │   ├── knowledge_store.py  # Knowledge documents + chunks (SQLite)
+        │   ├── knowledge_indexing.py # Indexing service (atomic replace)
+        │   ├── knowledge_retrieval.py # Mailbox-scoped retrieval
+        │   ├── rag.py              # Retrieval query builder + context format
+        │   ├── mcp_runtime.py      # MCP client manager (transport abstraction)
+        │   ├── tool_permissions.py # Default-deny tool permissions
+        │   ├── observability.py    # Observer context manager
+        │   ├── observability_store.py # Processing runs + tool audit
+        │   ├── migrations.py       # Legacy mailbox backfill
         │   ├── classification_parser.py  # Tolerant classifier output parser
         │   └── stage_defaults.py   # YAML defaults + DB override merging
         ├── config/
@@ -507,11 +585,13 @@ email_assistant/
 - The five-category classification taxonomy may not generalise to all
   organisations.
 - Draft quality depends on the selected LLM and prompt configuration.
-- RAG and MCP integrations are not yet part of the evaluated system.
+- Knowledge retrieval uses a deterministic hashing embedding client; a real
+  semantic embedding provider is not yet integrated.
+- Real MCP transport is not yet connected (permission/audit layer is ready).
 - External LLM providers may introduce privacy and data-governance
   considerations.
-- The current prototype does not provide enterprise-grade RBAC, audit logging,
-  or multi-tenant isolation.
+- The current prototype does not provide enterprise-grade RBAC or multi-tenant
+  isolation beyond the mailbox boundary.
 - Human evaluation of generated drafts may contain subjective bias.
 
 ---
@@ -522,23 +602,26 @@ email_assistant/
 - [x] Multi-provider LLM configuration with timeout & token safety guards
 - [x] YAML-based Agent & Task definitions (Classifier, Drafter)
 - [x] Pydantic structured output (`EmailClassification`) + tolerant fallback parser
-- [x] Optional `LOCAL_API_KEY` support for authenticated local proxies
-- [x] Decouple email fetching from AI agents (`core/email_fetcher.py`)
-- [x] Real IMAP email retrieval (`imap-tools`)
-- [x] FastAPI backend (sync / process / cases / send / stats / settings)
-- [x] React frontend (Dashboard / Inbox / Cases / Settings)
-- [x] SQLite email store — tickets, drafts, attachments (content-hash dedupe)
+- [x] Real IMAP email retrieval (`imap-tools`, per-mailbox)
+- [x] FastAPI backend + React frontend
+- [x] SQLite email store (content-hash dedupe, mailbox-scoped)
 - [x] SQLite settings store — AI configs, stage settings, mail accounts
 - [x] Encrypted secret storage (Fernet) for API keys & mail passwords
 - [x] SMTP sending of approved drafts (SSL / STARTTLS)
-- [ ] Email (ticket) data model — per-mailbox custom fields
+- [x] Multi-mailbox context model (`mailbox_id` as data boundary)
+- [x] Topics → classifier runtime (resolve + validate)
+- [x] Custom fields → case runtime (typed validation, cross-mailbox reject)
+- [x] AI topic + custom-field extraction (partial success, manual-value protection)
+- [x] Knowledge indexing — chunking + embeddings + atomic replace
+- [x] Knowledge retrieval — mailbox-scoped + retrieval test UI
+- [x] Embedding compatibility safety (model change → reindex)
+- [x] RAG → Drafter with provenance + injection-safe prompt
+- [x] MCP runtime — discovery, permissions, audit (default-deny)
+- [x] Observability — processing runs, latency, token usage
+- [ ] Real semantic embedding provider (OpenAI / Ollama)
+- [ ] Real MCP transport (stdio / HTTP)
 - [ ] CrewAI long-term memory via SQLite (`memory=True`)
-- [ ] ChromaDB RAG integration — index past emails and FAQs
-- [ ] Embedding pipeline — chunk documents, generate embeddings, store in ChromaDB
-- [ ] MockEmailService — simulated inbox for offline testing
-- [ ] MCP Server integration for local file access
-- [ ] Settings additions — Topics, Custom Fields, Knowledge/RAG, MCP Connectors, Roles / Users / Teams
-- [ ] Evaluation experiments (classification, structured output, RAG, safety)
+- [ ] Evaluation experiments (classification, retrieval benchmark, RAG, safety)
 - [ ] Final FYP Report
 
 ---

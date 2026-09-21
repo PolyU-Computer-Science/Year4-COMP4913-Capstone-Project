@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     title TEXT DEFAULT '',
     mime_type TEXT DEFAULT 'text/plain',
     content_hash TEXT DEFAULT '',
+    embedding_provider TEXT DEFAULT '',
+    embedding_model TEXT DEFAULT '',
+    embedding_dim INTEGER DEFAULT 0,
     status TEXT DEFAULT 'pending',
     metadata_json TEXT DEFAULT '{}',
     created_at TEXT,
@@ -85,6 +88,19 @@ class KnowledgeStore:
 
     def _init_db(self) -> None:
         conn = self._connect()
+        # Migration: add embedding identity columns for existing DBs.
+        for column, col_type in (
+            ("embedding_provider", "TEXT DEFAULT ''"),
+            ("embedding_model", "TEXT DEFAULT ''"),
+            ("embedding_dim", "INTEGER DEFAULT 0"),
+        ):
+            try:
+                conn.execute(
+                    f"ALTER TABLE knowledge_documents ADD COLUMN {column} {col_type}"
+                )
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
         conn.close()
 
     # ---- documents ----
@@ -147,13 +163,17 @@ class KnowledgeStore:
                     """
                     INSERT INTO knowledge_documents
                         (mailbox_id, source_id, external_id, title, mime_type,
-                         content_hash, status, metadata_json, created_at,
+                         content_hash, embedding_provider, embedding_model,
+                         embedding_dim, status, metadata_json, created_at,
                          updated_at, indexed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(mailbox_id, source_id, external_id) DO UPDATE SET
                         title = excluded.title,
                         mime_type = excluded.mime_type,
                         content_hash = excluded.content_hash,
+                        embedding_provider = excluded.embedding_provider,
+                        embedding_model = excluded.embedding_model,
+                        embedding_dim = excluded.embedding_dim,
                         status = excluded.status,
                         metadata_json = excluded.metadata_json,
                         updated_at = excluded.updated_at
@@ -165,6 +185,9 @@ class KnowledgeStore:
                         title,
                         mime_type,
                         content_hash,
+                        str(data.get("embedding_provider", "")),
+                        str(data.get("embedding_model", "")),
+                        int(data.get("embedding_dim", 0)),
                         status,
                         metadata_json,
                         now,

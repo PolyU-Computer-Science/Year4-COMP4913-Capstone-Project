@@ -10,7 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from email_assistant.core.embeddings import EmbeddingClient, cosine_similarity, get_embedding_client
+from email_assistant.core.embeddings import (
+    EmbeddingClient,
+    EmbeddingConfig,
+    cosine_similarity,
+    embeddings_compatible,
+    get_embedding_client,
+)
 from email_assistant.core.knowledge_store import KnowledgeStore
 
 
@@ -47,7 +53,9 @@ class KnowledgeRetriever:
         """Search mailbox chunks by cosine similarity.
 
         Only chunks belonging to ``mailbox_id`` and whose document is indexed
-        are considered. Chunks from other mailboxes are never returned.
+        are considered. Chunks from other mailboxes are never returned. Chunks
+        whose embedding identity (provider/model/dim) does not match the
+        current client are skipped — they must be re-indexed first.
         """
         if not query.strip():
             return []
@@ -61,6 +69,14 @@ class KnowledgeRetriever:
                 continue
             embedding = chunk.get("embedding") or []
             if not embedding:
+                continue
+            indexed_config = EmbeddingConfig(
+                provider=str(chunk.get("embedding_provider") or ""),
+                model=str(chunk.get("embedding_model") or ""),
+                dim=int(chunk.get("embedding_dim") or 0),
+            )
+            if not embeddings_compatible(indexed_config, self._embedding.config):
+                # Stale index under a different embedding model — skip.
                 continue
             score = cosine_similarity(query_vector, embedding)
             if min_score is not None and score < min_score:

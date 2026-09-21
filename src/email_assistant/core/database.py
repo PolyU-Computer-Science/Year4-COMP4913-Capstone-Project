@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS case_field_values (
     case_id TEXT NOT NULL,
     field_id INTEGER NOT NULL,
     value_json TEXT NOT NULL,
+    source TEXT DEFAULT 'manual',
+    updated_at TEXT,
     UNIQUE(case_id, field_id)
 )
 """
@@ -147,6 +149,16 @@ class Database:
         conn.execute(_SCHEMA)
         conn.execute(_ATTACHMENTS_SCHEMA)
         conn.execute(_CASE_FIELD_VALUES_SCHEMA)
+        try:
+            conn.execute(
+                "ALTER TABLE case_field_values ADD COLUMN source TEXT DEFAULT 'manual'"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE case_field_values ADD COLUMN updated_at TEXT")
+        except sqlite3.OperationalError:
+            pass
         try:
             conn.execute("ALTER TABLE emails ADD COLUMN html TEXT")
         except sqlite3.OperationalError:
@@ -517,26 +529,62 @@ class Database:
                 conn.close()
         return {row["field_id"]: row["value_json"] for row in rows}
 
+    def get_case_field_value_sources(self, case_id: str) -> dict[int, str]:
+        """Return {field_id: source} for a case (``ai`` or ``manual``)."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT field_id, source FROM case_field_values "
+                    "WHERE case_id = ?",
+                    (case_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        return {row["field_id"]: row["source"] or "manual" for row in rows}
+
     def set_case_field_values(
-        self, case_id: str, values: dict[int, str]
+        self, case_id: str, values: dict[int, str], source: str = "manual"
     ) -> None:
         """Upsert case field values keyed by field_id (JSON-encoded values)."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             conn = self._connect()
             try:
                 for field_id, value_json in values.items():
                     conn.execute(
                         """
-                        INSERT INTO case_field_values (case_id, field_id, value_json)
-                        VALUES (?, ?, ?)
+                        INSERT INTO case_field_values
+                            (case_id, field_id, value_json, source, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(case_id, field_id) DO UPDATE SET
-                            value_json = excluded.value_json
+                            value_json = excluded.value_json,
+                            source = excluded.source,
+                            updated_at = excluded.updated_at
                         """,
-                        (case_id, int(field_id), value_json),
+                        (case_id, int(field_id), value_json, source, now),
                     )
                 conn.commit()
             finally:
                 conn.close()
+
+    def set_ai_case_field_values(
+        self, case_id: str, values: dict[int, str]
+    ) -> None:
+        """Fill AI-extracted values only for fields that are still empty.
+
+        Existing values (especially manual ones) are never overwritten.
+        """
+        existing = self.get_case_field_value_sources(case_id)
+        to_write = {
+            field_id: value_json
+            for field_id, value_json in values.items()
+            if int(field_id) not in existing
+        }
+        if to_write:
+            self.set_case_field_values(case_id, to_write, source="ai")
 
     def delete_case_field_value(self, case_id: str, field_id: int) -> bool:
         """Delete a single case field value. Returns True if a row was removed."""
