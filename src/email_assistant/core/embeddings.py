@@ -23,6 +23,15 @@ class EmbeddingDimensionMismatch(ValueError):
     """Raised when comparing vectors of different dimensions."""
 
 
+class EmbeddingConfigurationError(RuntimeError):
+    """Raised when the configured embedding provider cannot be resolved.
+
+    This is distinct from a runtime API error: it means the deployment is
+    misconfigured (e.g. ``EMBEDDING_PROVIDER=openrouter`` without an API key).
+    It must NOT silently fall back to a different embedding model.
+    """
+
+
 @dataclass(frozen=True)
 class EmbeddingConfig:
     """Identity of an embedding provider/model, used for compatibility checks."""
@@ -120,23 +129,23 @@ def get_embedding_client(provider: str = "hashing") -> EmbeddingClient:
 
     ``hashing`` (and ``local``/empty) resolve to the deterministic offline
     client. ``openrouter`` resolves to the semantic OpenRouter client using
-    env config; a missing API key falls back to hashing so the pipeline never
-    crashes on configuration.
+    env config — a missing API key raises ``EmbeddingConfigurationError``
+    (no silent fallback). Unknown providers raise too, so a typo in
+    ``EMBEDDING_PROVIDER`` is caught instead of silently degrading to hashing.
     """
     if provider == "openrouter":
-        try:
-            from email_assistant.core.openrouter_embeddings import (
-                build_openrouter_embedding_client,
-            )
+        from email_assistant.core.openrouter_embeddings import (
+            build_openrouter_embedding_client,
+        )
 
-            return build_openrouter_embedding_client()
-        except Exception:  # noqa: BLE001 - fall back to offline client
-            return HashingEmbeddingClient()
+        return build_openrouter_embedding_client()
 
     if provider in ("hashing", "local", ""):
         return HashingEmbeddingClient()
-    # Unknown provider: fall back to deterministic local embeddings.
-    return HashingEmbeddingClient()
+
+    raise EmbeddingConfigurationError(
+        f"Unknown embedding provider: {provider!r}"
+    )
 
 
 def get_default_embedding_client() -> EmbeddingClient:

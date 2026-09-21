@@ -28,6 +28,7 @@ export interface Case {
   mailbox_id: number | null
   topic_id: number | null
   topic_raw: string
+  knowledge_refs: { source_id: number; chunk_id: number; score: number }[]
 }
 
 export interface CaseField {
@@ -241,13 +242,30 @@ export interface KnowledgeSourceIn {
 }
 
 export interface RetrievalResult {
+  source_id: number
+  source_name: string
   chunk_id: number
   document_id: number
-  source_id: number
-  title: string
-  content: string
+  chunk_index: number
   score: number
+  content: string
   metadata: Record<string, unknown>
+}
+
+export interface RetrievalResponse {
+  query: string
+  embedding: { provider: string; model: string; dim: number }
+  stats: {
+    top_k: number
+    chunks_considered: number
+    stale_chunks_skipped: number
+    returned_count: number
+    source_count: number
+    latency_ms: number
+    max_score: number
+    min_returned_score: number
+  }
+  results: RetrievalResult[]
 }
 
 export interface ToolDescriptor {

@@ -66,22 +66,31 @@ class CaseStore:
         case = self._db.save_processing(
             email_id, classification.model_dump(), draft
         )
-        return CaseOut(**case) if case is not None else None
+        return self._case_with_refs(case)
 
     def get_cases(self, mailbox_id: int | None = None) -> list[CaseOut]:
-        return [CaseOut(**case) for case in self._db.list_cases(mailbox_id)]
+        return [
+            self._case_with_refs(case) for case in self._db.list_cases(mailbox_id)
+        ]
 
     def get_case(self, email_id: str) -> CaseOut | None:
         case = self._db.get_case(email_id)
-        return CaseOut(**case) if case is not None else None
+        return self._case_with_refs(case)
 
     def save_draft(self, email_id: str, draft: str) -> CaseOut | None:
         case = self._db.save_draft(email_id, draft)
-        return CaseOut(**case) if case is not None else None
+        return self._case_with_refs(case)
 
     def mark_sent(self, email_id: str) -> CaseOut | None:
         case = self._db.mark_sent(email_id)
-        return CaseOut(**case) if case is not None else None
+        return self._case_with_refs(case)
+
+    def _case_with_refs(self, case: dict | None) -> CaseOut | None:
+        if case is None:
+            return None
+        return CaseOut(
+            **{**case, "knowledge_refs": self._db.get_draft_knowledge_refs(case["id"])}
+        )
 
     def get_case_field_values(self, case_id: str) -> dict[int, str]:
         return self._db.get_case_field_values(case_id)
@@ -92,6 +101,12 @@ class CaseStore:
     def fill_ai_case_field_values(self, case_id: str, values: dict[int, str]) -> None:
         """Fill AI-extracted values only into empty fields (protects manual)."""
         self._db.set_ai_case_field_values(case_id, values)
+
+    def set_draft_knowledge_refs(self, case_id: str, refs: list[dict]) -> None:
+        self._db.set_draft_knowledge_refs(case_id, refs)
+
+    def get_draft_knowledge_refs(self, case_id: str) -> list[dict]:
+        return self._db.get_draft_knowledge_refs(case_id)
 
     def clear(self) -> None:
         """Reset the store (used by tests)."""

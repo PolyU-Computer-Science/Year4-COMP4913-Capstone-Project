@@ -12,9 +12,11 @@ from email_assistant.core.settings_store import SettingsStore
 from backend.app.schemas import (
     KnowledgeDocumentOut,
     KnowledgeIndexResult,
+    RetrievalEmbeddingOut,
     RetrievalRequest,
     RetrievalResponse,
     RetrievalResultOut,
+    RetrievalStatsOut,
 )
 
 router = APIRouter(prefix="/api/mailboxes", tags=["knowledge"])
@@ -74,7 +76,8 @@ def list_documents(mailbox_id: int, source_id: int) -> list[KnowledgeDocumentOut
 )
 def search_knowledge(mailbox_id: int, payload: RetrievalRequest) -> RetrievalResponse:
     _require_mailbox(mailbox_id)
-    results = KnowledgeRetriever().search(
+    retriever = KnowledgeRetriever()
+    results, stats = retriever.search_detailed(
         mailbox_id,
         payload.query,
         top_k=payload.top_k,
@@ -82,5 +85,32 @@ def search_knowledge(mailbox_id: int, payload: RetrievalRequest) -> RetrievalRes
     )
     return RetrievalResponse(
         query=payload.query,
-        results=[RetrievalResultOut(**vars(r)) for r in results],
+        embedding=RetrievalEmbeddingOut(
+            provider=retriever._embedding.provider,
+            model=retriever._embedding.model,
+            dim=retriever._embedding.dim,
+        ),
+        stats=RetrievalStatsOut(
+            top_k=payload.top_k,
+            chunks_considered=stats.chunks_considered,
+            stale_chunks_skipped=stats.stale_chunks_skipped,
+            returned_count=stats.returned_count,
+            source_count=stats.source_count,
+            latency_ms=stats.latency_ms,
+            max_score=stats.max_score,
+            min_returned_score=stats.min_returned_score,
+        ),
+        results=[
+            RetrievalResultOut(
+                source_id=r.source_id,
+                source_name=r.title,
+                chunk_id=r.chunk_id,
+                document_id=r.document_id,
+                chunk_index=r.chunk_index,
+                score=r.score,
+                content=r.content,
+                metadata=r.metadata,
+            )
+            for r in results
+        ],
     )

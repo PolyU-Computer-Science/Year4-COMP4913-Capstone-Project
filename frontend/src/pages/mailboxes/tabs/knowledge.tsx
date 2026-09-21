@@ -48,7 +48,7 @@ import {
   searchKnowledge,
   unassignKnowledge,
 } from '@/lib/api'
-import type { KnowledgeSource, RetrievalResult } from '@/lib/types'
+import type { KnowledgeSource, RetrievalResponse } from '@/lib/types'
 import { toast } from 'sonner'
 
 export function KnowledgeTab({ mailboxId }: { mailboxId: number }) {
@@ -310,12 +310,20 @@ function RetrievalSheet({
 }) {
   const [query, setQuery] = useState('')
   const [topK, setTopK] = useState('5')
-  const [results, setResults] = useState<RetrievalResult[] | null>(null)
+  const [data, setData] = useState<RetrievalResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const searchMutation = useMutation({
     mutationFn: () => searchKnowledge(mailboxId, query, Number(topK)),
-    onSuccess: (data) => setResults(data.results),
-    onError: () => toast.error('Retrieval failed'),
+    onSuccess: (result) => {
+      setData(result)
+      setError(null)
+    },
+    onError: (err) => {
+      const detail = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail
+      setError(detail ?? 'Embedding service unavailable')
+    },
   })
 
   return (
@@ -357,18 +365,45 @@ function RetrievalSheet({
             </Button>
           </div>
 
-          {results !== null && (
+          {error !== null && (
+            <div className="flex flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+              <p className="text-sm font-medium text-destructive">Retrieval failed</p>
+              <p className="text-xs text-muted-foreground">{error}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => searchMutation.mutate()}
+              >
+                Try Again
+              </Button>
+            </div>
+          )}
+
+          {data !== null && error === null && (
             <div className="flex flex-col gap-2">
-              {results.length === 0 ? (
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  {data.stats.returned_count} result{data.stats.returned_count === 1 ? '' : 's'}
+                  {' · '}
+                  {data.stats.latency_ms.toFixed(0)} ms
+                </span>
+                <span>
+                  {data.embedding.model}
+                  {data.embedding.dim > 0 ? ` · ${data.embedding.dim} dims` : ''}
+                </span>
+              </div>
+
+              {data.results.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   No results found.
                 </p>
               ) : (
-                results.map((result, index) => (
+                data.results.map((result, index) => (
                   <div key={result.chunk_id} className="rounded-lg border p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium">
-                        #{index + 1} {result.title}
+                        #{index + 1} {result.source_name}
                       </span>
                       <span className="text-xs font-medium text-muted-foreground">
                         {result.score.toFixed(3)}

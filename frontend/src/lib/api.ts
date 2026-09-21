@@ -18,7 +18,7 @@ import type {
   MailboxConnector,
   MailboxIn,
   ProcessingRun,
-  RetrievalResult,
+  RetrievalResponse,
   StagesSettings,
   Stats,
   TestResult,
@@ -366,8 +366,8 @@ export async function searchKnowledge(
   mailboxId: number,
   query: string,
   topK = 5,
-): Promise<{ query: string; results: RetrievalResult[] }> {
-  const { data } = await client.post(
+): Promise<RetrievalResponse> {
+  const { data } = await client.post<RetrievalResponse>(
     `/mailboxes/${mailboxId}/knowledge/search`,
     { query, top_k: topK },
   )

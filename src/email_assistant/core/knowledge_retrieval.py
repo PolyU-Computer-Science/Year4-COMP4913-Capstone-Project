@@ -7,7 +7,8 @@ enabled sources.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from email_assistant.core.embeddings import (
@@ -29,6 +30,7 @@ class RetrievalResult:
     content: str
     score: float
     metadata: dict[str, Any]
+    chunk_index: int = 0
 
 
 @dataclass
@@ -38,6 +40,10 @@ class RetrievalStats:
     chunks_considered: int = 0
     stale_chunks_skipped: int = 0
     returned_count: int = 0
+    source_count: int = 0
+    latency_ms: float = 0.0
+    max_score: float = 0.0
+    min_returned_score: float = 0.0
 
 
 class KnowledgeRetriever:
@@ -84,6 +90,7 @@ class KnowledgeRetriever:
         if not query.strip():
             return [], stats
 
+        start = time.perf_counter()
         query_vector = self._embedding.embed_query(query)
         chunks = self._store.list_chunks(mailbox_id, source_ids)
         stats.chunks_considered = len(chunks)
@@ -116,10 +123,16 @@ class KnowledgeRetriever:
                     content=str(chunk["content"]),
                     score=round(float(score), 4),
                     metadata=chunk.get("metadata") or {},
+                    chunk_index=int(chunk.get("chunk_index") or 0),
                 )
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
         results = results[:top_k]
         stats.returned_count = len(results)
+        stats.source_count = len({r.source_id for r in results})
+        if results:
+            stats.max_score = results[0].score
+            stats.min_returned_score = results[-1].score
+        stats.latency_ms = round((time.perf_counter() - start) * 1000, 2)
         return results, stats

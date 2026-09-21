@@ -221,6 +221,13 @@ def process_email(email_id: str) -> ProcessResponse:
         store.mark_failed(email_id)
         raise HTTPException(status_code=404, detail="Email not found")
 
+    # Persist knowledge provenance for the draft (which chunks grounded it).
+    if knowledge_refs:
+        try:
+            store.set_draft_knowledge_refs(email_id, knowledge_refs)
+        except Exception:  # noqa: BLE001 - provenance is best effort
+            pass
+
     # 3. AI field extraction (structured, mailbox-scoped, partial success).
     if context and context.active_fields:
         from email_assistant.core.extraction import ClassificationExtractionClient

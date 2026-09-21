@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS case_field_values (
 )
 """
 
+_DRAFT_KNOWLEDGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS draft_knowledge_refs (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    chunk_id INTEGER NOT NULL,
+    score REAL,
+    UNIQUE(case_id, chunk_id)
+)
+"""
+
 _EMAIL_COLUMNS = "id, sender, subject, body, timestamp, html, mailbox_id"
 
 _CASE_COLUMNS = (
@@ -149,6 +160,7 @@ class Database:
         conn.execute(_SCHEMA)
         conn.execute(_ATTACHMENTS_SCHEMA)
         conn.execute(_CASE_FIELD_VALUES_SCHEMA)
+        conn.execute(_DRAFT_KNOWLEDGE_SCHEMA)
         try:
             conn.execute(
                 "ALTER TABLE case_field_values ADD COLUMN source TEXT DEFAULT 'manual'"
@@ -479,9 +491,59 @@ class Database:
                 conn.execute("DELETE FROM emails")
                 conn.execute("DELETE FROM attachments")
                 conn.execute("DELETE FROM case_field_values")
+                conn.execute("DELETE FROM draft_knowledge_refs")
                 conn.commit()
             finally:
                 conn.close()
+
+    def set_draft_knowledge_refs(
+        self, case_id: str, refs: list[dict[str, Any]]
+    ) -> None:
+        """Replace the knowledge provenance for a draft."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "DELETE FROM draft_knowledge_refs WHERE case_id = ?", (case_id,)
+                )
+                for ref in refs:
+                    conn.execute(
+                        """
+                        INSERT INTO draft_knowledge_refs
+                            (case_id, source_id, chunk_id, score)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            case_id,
+                            int(ref["source_id"]),
+                            int(ref["chunk_id"]),
+                            float(ref.get("score", 0.0)),
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def get_draft_knowledge_refs(self, case_id: str) -> list[dict[str, Any]]:
+        """Return knowledge provenance for a draft."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT source_id, chunk_id, score FROM draft_knowledge_refs "
+                    "WHERE case_id = ? ORDER BY score DESC",
+                    (case_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        return [
+            {
+                "source_id": row["source_id"],
+                "chunk_id": row["chunk_id"],
+                "score": row["score"],
+            }
+            for row in rows
+        ]
 
     def backfill_missing_mailbox_ids(self, mailbox_id: int) -> int:
         """Assign all emails with NULL mailbox_id to the given mailbox.

@@ -175,7 +175,11 @@ def build_openrouter_embedding_client() -> OpenRouterEmbeddingClient:
     )
     batch_size = int(os.environ.get("EMBEDDING_BATCH_SIZE", DEFAULT_BATCH_SIZE))
     if not api_key:
-        raise OpenRouterAuthError("OPENROUTER_API_KEY is not set")
+        from email_assistant.core.embeddings import EmbeddingConfigurationError
+
+        raise EmbeddingConfigurationError(
+            "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set"
+        )
     return OpenRouterEmbeddingClient(
         api_key=api_key,
         model=model,

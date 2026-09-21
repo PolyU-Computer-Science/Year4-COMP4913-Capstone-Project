@@ -162,6 +162,27 @@ export default function CaseDetailPage() {
           </Card>
 
           <CaseFields caseId={caseItem.id} />
+
+          {caseItem.knowledge_refs && caseItem.knowledge_refs.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Knowledge Used</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                {caseItem.knowledge_refs.map((ref) => (
+                  <div
+                    key={`${ref.source_id}-${ref.chunk_id}`}
+                    className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
+                  >
+                    <span>Source #{ref.source_id} · Chunk #{ref.chunk_id}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {ref.score.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <Card>

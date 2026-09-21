@@ -49,6 +49,7 @@ class CaseOut(BaseModel):
     mailbox_id: int | None = None
     topic_id: int | None = None
     topic_raw: str = ""
+    knowledge_refs: list[dict] = Field(default_factory=list)
 
 
 class DraftIn(BaseModel):
@@ -373,17 +374,37 @@ class RetrievalRequest(BaseModel):
 
 
 class RetrievalResultOut(BaseModel):
+    source_id: int
+    source_name: str = ""
     chunk_id: int
     document_id: int
-    source_id: int
-    title: str
-    content: str
+    chunk_index: int = 0
     score: float
+    content: str
     metadata: dict = Field(default_factory=dict)
+
+
+class RetrievalEmbeddingOut(BaseModel):
+    provider: str = ""
+    model: str = ""
+    dim: int = 0
+
+
+class RetrievalStatsOut(BaseModel):
+    top_k: int = 0
+    chunks_considered: int = 0
+    stale_chunks_skipped: int = 0
+    returned_count: int = 0
+    source_count: int = 0
+    latency_ms: float = 0.0
+    max_score: float = 0.0
+    min_returned_score: float = 0.0
 
 
 class RetrievalResponse(BaseModel):
     query: str
+    embedding: RetrievalEmbeddingOut = Field(default_factory=RetrievalEmbeddingOut)
+    stats: RetrievalStatsOut = Field(default_factory=RetrievalStatsOut)
     results: list[RetrievalResultOut]
 
 
