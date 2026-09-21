@@ -20,6 +20,10 @@ evaluation/
 ├── schemas.py           # Pydantic schemas for each record type
 ├── generator.py         # deterministic, seeded dataset generator
 ├── validators.py        # duplicate/reference/leakage checks
+├── metrics.py           # accuracy / F1 / confusion / Recall@K / MRR / ...
+├── runners.py           # model-agnostic experiment runners
+├── predictors.py        # adapters bridging the harness to runtime clients
+├── harness.py           # orchestration + raw/summary result writer
 ├── manifest.json        # dataset version, counts, splits, methodology
 ├── datasets/
 │   └── v1/
@@ -29,7 +33,7 @@ evaluation/
 │       ├── drafting.jsonl
 │       ├── safety.jsonl
 │       └── tool_planning.jsonl
-└── (runners/, metrics/, results/ — Phase 8)
+└── results/             # (gitignored) raw runs + summary JSON
 ```
 
 ## Dataset summary
@@ -57,11 +61,28 @@ retrieve or use the other mailbox's facts.
 
 ```bash
 uv run python -m evaluation.generator     # regenerate datasets/v1/*.jsonl
-uv run python -m evaluation.validators    # (see tests/test_evaluation.py)
+uv run pytest backend/tests/test_evaluation.py backend/tests/test_evaluation_harness.py
 ```
 
 Generation is seeded (`SEED = 20260921`), so the datasets are fully
 reproducible.
+
+## Running experiments (Phase 8)
+
+The harness is model-agnostic. To run a real experiment, build a predictor
+adapter (see `evaluation/predictors.py`) and call:
+
+```python
+from evaluation.harness import run_and_write
+from evaluation.predictors import StructuredClassificationPredictor
+
+result = run_and_write("classification", predictor)
+print(result.summary)
+```
+
+Raw per-record results are written to `evaluation/results/<experiment>_<ts>/`
+alongside a `summary.json`; the summary metrics are derived from the raw
+records so results are reproducible. The `results/` directory is gitignored.
 
 ## Rules
 
