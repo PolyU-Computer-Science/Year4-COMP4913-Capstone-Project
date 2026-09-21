@@ -1,36 +1,36 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  CheckCircle2,
   Download,
   Inbox as InboxIcon,
   Loader2,
+  Search,
   Sparkles,
 } from 'lucide-react'
 
 import { EmailBody } from '@/components/email-body'
-import { PageHeading } from '@/components/page-heading'
+import { EmptyState } from '@/components/empty-state'
+import { PageHeader } from '@/components/page-header'
+import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { fetchEmails, processAllEmails, processEmail, syncEmails } from '@/lib/api'
+  fetchEmails,
+  fetchMailboxes,
+  processAllEmails,
+  processEmail,
+  syncEmails,
+} from '@/lib/api'
 import type { EmailItem } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 function formatDate(iso: string): string {
@@ -39,7 +39,6 @@ function formatDate(iso: string): string {
   return date.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   })
@@ -53,22 +52,31 @@ export default function Inbox() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<EmailItem | null>(null)
   const [showImages, setShowImages] = useState(false)
-
+  const [query, setQuery] = useState('')
+  const [mailboxFilter, setMailboxFilter] = useState<string>('all')
   const [autoProcessing, setAutoProcessing] = useState(false)
 
+  const activeMailboxId = mailboxFilter === 'all' ? undefined : Number(mailboxFilter)
+
   const { data: emails = [], isLoading } = useQuery({
-    queryKey: ['emails'],
-    queryFn: fetchEmails,
+    queryKey: ['emails', activeMailboxId],
+    queryFn: () => fetchEmails(activeMailboxId),
     refetchInterval: autoProcessing ? 2000 : false,
+  })
+  const { data: mailboxes = [] } = useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: fetchMailboxes,
   })
 
   const syncMutation = useMutation({
-    mutationFn: syncEmails,
+    mutationFn: () => syncEmails(activeMailboxId),
     onSuccess: ({ synced }) => {
       queryClient.invalidateQueries({ queryKey: ['emails'] })
       queryClient.invalidateQueries({ queryKey: ['stats'] })
       toast.success(
-        synced > 0 ? `Fetched ${synced} new email${synced === 1 ? '' : 's'}` : 'Already up to date',
+        synced > 0
+          ? `Fetched ${synced} new email${synced === 1 ? '' : 's'}`
+          : 'Already up to date',
       )
       setAutoProcessing(true)
       processAllMutation.mutate()
@@ -81,7 +89,7 @@ export default function Inbox() {
   })
 
   const processAllMutation = useMutation({
-    mutationFn: processAllEmails,
+    mutationFn: () => processAllEmails(activeMailboxId),
     onSuccess: ({ processed, failed }) => {
       setAutoProcessing(false)
       queryClient.invalidateQueries({ queryKey: ['emails'] })
@@ -92,9 +100,7 @@ export default function Inbox() {
           `Processed ${processed} email${processed === 1 ? '' : 's'}, ${failed.length} failed`,
         )
       } else if (processed > 0) {
-        toast.success(
-          `Processed ${processed} email${processed === 1 ? '' : 's'}`,
-        )
+        toast.success(`Processed ${processed} email${processed === 1 ? '' : 's'}`)
       }
     },
     onError: (error) => {
@@ -112,8 +118,16 @@ export default function Inbox() {
       queryClient.invalidateQueries({ queryKey: ['cases'] })
       queryClient.invalidateQueries({ queryKey: ['stats'] })
       toast.success('Email processed!')
+      setSelected(null)
     },
     onError: () => toast.error('Processing failed'),
+  })
+
+  const filtered = emails.filter((email) => {
+    if (query && !`${email.subject} ${email.sender}`.toLowerCase().includes(query.toLowerCase())) {
+      return false
+    }
+    return true
   })
 
   const processingId = processMutation.isPending
@@ -122,15 +136,10 @@ export default function Inbox() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PageHeading
-          title="Inbox"
-          subtitle="Manage and process incoming emails"
-        />
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            {emails.length} emails loaded
-          </span>
+      <PageHeader
+        title="Inbox"
+        description="Read and process incoming emails."
+        action={
           <Button
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}
@@ -140,10 +149,10 @@ export default function Inbox() {
             ) : (
               <Download />
             )}
-            Fetch Emails
+            Sync Mail
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       {isLoading ? (
         <div className="flex items-center gap-2 py-12 text-muted-foreground">
@@ -151,142 +160,133 @@ export default function Inbox() {
           <p className="text-sm">Loading emails…</p>
         </div>
       ) : emails.length === 0 ? (
-        <div className="flex flex-col items-center gap-1 py-12 text-muted-foreground">
-          <InboxIcon className="size-12" />
-          <p className="text-lg">No emails loaded yet</p>
-          <p className="text-sm">Click Fetch Emails to retrieve your inbox.</p>
-        </div>
-      ) : (
-        <Card>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>Received</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {emails.map((email) => {
-                  const processing =
-                    email.status === 'processing' || processingId === email.id
-                  return (
-                    <TableRow
-                      key={email.id}
-                      className="cursor-pointer"
-                      onClick={() => {
-                        setSelected(email)
-                        setShowImages(false)
-                      }}
-                    >
-                      <TableCell className="max-w-80 font-medium">
-                        <span className="block truncate hover:underline">
-                          {email.subject}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {email.sender}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(email.timestamp)}
-                      </TableCell>
-                      <TableCell>
-                        {email.status === 'processing' || processing ? (
-                          <Badge variant="outline" className="text-blue-600">
-                            <Loader2 className="size-3 animate-spin" />
-                            Processing
-                          </Badge>
-                        ) : email.status === 'processed' ? (
-                          <Badge variant="secondary">
-                            <CheckCircle2 className="size-3" />
-                            Processed
-                          </Badge>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">
-                            New
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      <Dialog
-        open={selected !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelected(null)
-            setShowImages(false)
+        <EmptyState
+          icon={InboxIcon}
+          title="No emails yet"
+          description="Sync your mailbox to start receiving and processing emails."
+          action={
+            <Button onClick={() => syncMutation.mutate()}>Sync Mail</Button>
           }
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          {selected ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>{selected.subject}</DialogTitle>
-                <DialogDescription>
-                  From: {selected.sender} · {formatDate(selected.timestamp)}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="max-h-[60vh] overflow-y-auto px-1">
-                <EmailBody
-                  body={selected.body}
-                  html={selected.html}
-                  emailId={selected.id}
-                  showImages={showImages}
-                />
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
+          <div className="flex flex-col gap-3">
+            <div className="relative">
+              <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-8"
+                placeholder="Search email…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <Select value={mailboxFilter} onValueChange={(v) => setMailboxFilter(v ?? 'all')}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="All Mailboxes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Mailboxes</SelectItem>
+                {mailboxes.map((mailbox) => (
+                  <SelectItem key={mailbox.id} value={String(mailbox.id)}>
+                    {mailbox.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex flex-col gap-1 overflow-y-auto">
+              {filtered.map((email) => (
+                <button
+                  key={email.id}
+                  onClick={() => {
+                    setSelected(email)
+                    setShowImages(false)
+                  }}
+                  className={cn(
+                    'flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50',
+                    selected?.id === email.id && 'border-ring bg-muted/50',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">
+                      {email.subject}
+                    </span>
+                    {email.status === 'new' ? (
+                      <span className="size-2 shrink-0 rounded-full bg-primary" />
+                    ) : null}
+                  </div>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {email.sender}
+                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">
+                      {formatDate(email.timestamp)}
+                    </span>
+                    <StatusBadge status={email.status} />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border">
+            {selected === null ? (
+              <div className="flex h-full min-h-64 items-center justify-center text-sm text-muted-foreground">
+                Select an email to read it.
               </div>
-              <DialogFooter>
-                {hasExternalImages(selected.html) && (
-                  <Button
-                    variant="outline"
-                    className="mr-auto"
-                    onClick={() => setShowImages((v) => !v)}
-                  >
-                    {showImages ? 'Hide images' : 'Display images'}
-                  </Button>
-                )}
-                {selected.status === 'processing' || processingId === selected.id ? (
-                  <Badge variant="outline" className="text-blue-600">
-                    <Loader2 className="size-3 animate-spin" />
-                    Processing
-                  </Badge>
-                ) : selected.status === 'processed' ? (
-                  <>
-                    <Badge variant="secondary" className="self-start">
-                      <CheckCircle2 className="size-3" />
-                      Processed
-                    </Badge>
+            ) : (
+              <div className="flex flex-col gap-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <h2 className="text-lg font-semibold">{selected.subject}</h2>
+                    <span className="text-sm text-muted-foreground">
+                      From: {selected.sender} · {formatDate(selected.timestamp)}
+                    </span>
+                  </div>
+                  <StatusBadge status={selected.status} />
+                </div>
+
+                <div className="max-h-[60vh] overflow-y-auto">
+                  <EmailBody
+                    body={selected.body}
+                    html={selected.html}
+                    emailId={selected.id}
+                    showImages={showImages}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 border-t pt-3">
+                  {hasExternalImages(selected.html) && (
                     <Button
-                      onClick={() => processMutation.mutate(selected.id)}
-                      disabled={processingId !== null}
+                      variant="outline"
+                      onClick={() => setShowImages((v) => !v)}
                     >
-                      <Sparkles />
-                      Re-process
+                      {showImages ? 'Hide images' : 'Display images'}
                     </Button>
-                  </>
-                ) : (
-                  <Button
-                    onClick={() => processMutation.mutate(selected.id)}
-                    disabled={processingId !== null}
-                  >
-                    <Sparkles />
-                    AI Process
-                  </Button>
-                )}
-              </DialogFooter>
-            </>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+                  )}
+                  <div className="ml-auto flex items-center gap-2">
+                    {selected.status === 'processing' ||
+                    processingId === selected.id ? (
+                      <Badge variant="outline" className="text-blue-600">
+                        <Loader2 className="size-3 animate-spin" />
+                        Processing
+                      </Badge>
+                    ) : (
+                      <Button
+                        onClick={() => processMutation.mutate(selected.id)}
+                        disabled={processingId !== null}
+                      >
+                        <Sparkles />
+                        Process with AI
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

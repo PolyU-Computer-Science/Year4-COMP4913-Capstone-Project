@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Self
 
 from dotenv import load_dotenv
-from imap_tools import AND, MailBox, MailMessage
+from imap_tools import MailBox, MailMessage
 import os
 
 
@@ -68,7 +68,7 @@ class EmailSettings:
             port=int(_get_str(source, "EMAIL_PORT", "993")),
             address=address,
             password=password,
-            folder=_get_str(source, "EMAIL_FOLDER", "INBOX"),
+            folder="INBOX",
             max_emails=max_emails,
         )
 
@@ -115,23 +115,23 @@ def _convert_message(msg: MailMessage) -> dict:
 
 
 def fetch_via_imap(settings: EmailSettings) -> list[dict[str, str]]:
-    """Fetch unread emails from IMAP server."""
+    """Fetch all emails (read + unread) from the IMAP server."""
     print(f"Connecting to IMAP server: {settings.server}:{settings.port}")
-    print(f"Fetching unread emails from folder: {settings.folder}")
+    print(f"Fetching all emails from folder: {settings.folder}")
 
     with MailBox(settings.server, port=settings.port).login(
         settings.address,
         settings.password,
         initial_folder=settings.folder,
     ) as mailbox:
-        criteria = AND(seen=False)
-        messages = list(mailbox.fetch(criteria, limit=settings.max_emails))
+        # No criteria = IMAP ALL (read + unread)
+        messages = list(mailbox.fetch(limit=settings.max_emails))
 
         if not messages:
-            print("No unread emails found.")
+            print("No emails found.")
             return []
 
-        print(f"Found {len(messages)} unread email(s).")
+        print(f"Found {len(messages)} email(s).")
 
         emails = []
         for msg in messages:
@@ -155,19 +155,22 @@ def load_email_settings() -> EmailSettings:
         port=int(account.get("imap_port") or 993),
         address=str(account.get("address") or ""),
         password=str(account.get("password") or ""),
-        folder=str(account.get("folder") or "INBOX"),
+        folder="INBOX",
         max_emails=int(account.get("max_emails") or 50),
     )
 
 
-def fetch_emails() -> list[dict[str, str]]:
-    """Fetch unread emails from the inbox via IMAP.
+def fetch_emails(mailbox_id: int | None = None) -> list[dict[str, str]]:
+    """Fetch emails from the inbox via IMAP.
 
-    If an enabled mail account is configured (settings DB) or EMAIL_ENABLED is
-    true with valid credentials, this function connects to the IMAP server and
-    retrieves unread emails, raising on connection/auth errors. Otherwise it
-    returns an empty list.
+    If ``mailbox_id`` is provided, emails are fetched from that mailbox's IMAP
+    configuration and tagged with the mailbox id at ingestion. Otherwise the
+    legacy behaviour is used: an enabled mail account (settings DB) or
+    ``EMAIL_ENABLED`` env with valid credentials, with no mailbox scoping.
     """
+    if mailbox_id is not None:
+        return _fetch_mailbox_emails(mailbox_id)
+
     settings = load_email_settings()
 
     if settings.enabled and settings.address:
@@ -175,3 +178,34 @@ def fetch_emails() -> list[dict[str, str]]:
 
     print("No enabled mail account; no emails to fetch.")
     return []
+
+
+def _fetch_mailbox_emails(mailbox_id: int) -> list[dict[str, str]]:
+    """Fetch emails for a specific mailbox and tag them with ``mailbox_id``."""
+    from email_assistant.core.settings_store import SettingsStore
+
+    store = SettingsStore()
+    mailbox = store.get_mailbox(mailbox_id)
+    if mailbox is None:
+        print(f"Mailbox {mailbox_id} not found; no emails to fetch.")
+        return []
+
+    password = store.get_mailbox_password(mailbox_id) or ""
+    settings = EmailSettings(
+        enabled=True,
+        server=str(mailbox.get("imap_host") or "imap.gmail.com"),
+        port=int(mailbox.get("imap_port") or 993),
+        address=str(mailbox.get("address") or ""),
+        password=password,
+        folder=str(mailbox.get("imap_folder") or "INBOX"),
+        max_emails=int(mailbox.get("max_emails") or 50),
+    )
+
+    if not settings.address or not settings.server:
+        print(f"Mailbox {mailbox_id} has no address/IMAP host; skipping.")
+        return []
+
+    emails = fetch_via_imap(settings)
+    for email in emails:
+        email["mailbox_id"] = mailbox_id
+    return emails

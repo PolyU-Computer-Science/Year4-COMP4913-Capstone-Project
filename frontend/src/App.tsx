@@ -1,49 +1,40 @@
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 
+import { AppHeader } from '@/components/app-header'
 import { AppSidebar } from '@/components/app-sidebar'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import Cases from '@/pages/cases'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import CasesPage from '@/pages/cases'
+import CaseDetailPage from '@/pages/case-detail'
 import Dashboard from '@/pages/dashboard'
 import Inbox from '@/pages/inbox'
-import AISettingsPage from '@/pages/settings/ai'
-import MailAccountsPage from '@/pages/settings/mail'
-
-const TITLES: Record<string, string> = {
-  '/': 'Dashboard',
-  '/inbox': 'Inbox',
-  '/cases': 'Cases',
-  '/settings/ai': 'AI Settings',
-  '/settings/mail': 'Mail Accounts',
-}
+import MailboxesPage from '@/pages/mailboxes'
+import NewMailboxPage from '@/pages/mailboxes/new'
+import MailboxDetailPage from '@/pages/mailboxes/detail'
+import AIModelsPage from '@/pages/settings/ai-models'
+import GeneralPage from '@/pages/settings/general'
 
 function AppShell() {
-  const location = useLocation()
-  const title = TITLES[location.pathname] ?? 'Dashboard'
-
   return (
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-2 h-4" />
-          <h1 className="text-lg font-semibold">{title}</h1>
-          <div className="ml-auto flex items-center gap-2">
-            <Badge variant="secondary">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              Online
-            </Badge>
-          </div>
-        </header>
+        <AppHeader />
         <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/inbox" element={<Inbox />} />
-            <Route path="/cases" element={<Cases />} />
-            <Route path="/settings/ai" element={<AISettingsPage />} />
-            <Route path="/settings/mail" element={<MailAccountsPage />} />
+            <Route path="/cases" element={<CasesPage />} />
+            <Route path="/cases/:caseId" element={<CaseDetailPage />} />
+            <Route path="/mailboxes" element={<MailboxesPage />} />
+            <Route path="/mailboxes/new" element={<NewMailboxPage />} />
+            <Route
+              path="/mailboxes/:mailboxId/:tab?"
+              element={<MailboxDetailPage />}
+            />
+            <Route path="/settings/ai-models" element={<AIModelsPage />} />
+            <Route path="/settings/general" element={<GeneralPage />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
       </SidebarInset>

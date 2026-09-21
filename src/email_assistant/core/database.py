@@ -26,9 +26,15 @@ def _db_path() -> str:
     return os.environ.get("SQLITE_EMAIL_DB", "data/emails.db")
 
 
-def make_email_id(sender: str, subject: str, timestamp: str) -> str:
-    """Derive a stable id for an email from its identifying fields."""
-    raw = f"{sender}\x00{subject}\x00{timestamp}"
+def make_email_id(
+    sender: str, subject: str, timestamp: str, mailbox_id: int | None = None
+) -> str:
+    """Derive a stable id for an email from its identifying fields.
+
+    ``mailbox_id`` is included so the same message received by two different
+    mailboxes is not collapsed into a single ticket.
+    """
+    raw = f"{mailbox_id}\x00{sender}\x00{subject}\x00{timestamp}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -49,7 +55,10 @@ CREATE TABLE IF NOT EXISTS emails (
     custom TEXT,
     draft TEXT,
     created_at TEXT,
-    sent_at TEXT
+    sent_at TEXT,
+    mailbox_id INTEGER,
+    topic_id INTEGER,
+    topic_raw TEXT
 )
 """
 
@@ -65,15 +74,25 @@ CREATE TABLE IF NOT EXISTS attachments (
 )
 """
 
-_EMAIL_COLUMNS = "id, sender, subject, body, timestamp, html"
+_CASE_FIELD_VALUES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS case_field_values (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    field_id INTEGER NOT NULL,
+    value_json TEXT NOT NULL,
+    UNIQUE(case_id, field_id)
+)
+"""
+
+_EMAIL_COLUMNS = "id, sender, subject, body, timestamp, html, mailbox_id"
 
 _CASE_COLUMNS = (
     f"{_EMAIL_COLUMNS}, status, category, topic, priority, urgency_score, "
-    "summary, custom, draft, created_at, sent_at"
+    "summary, custom, draft, created_at, sent_at, topic_id, topic_raw"
 )
 
 
-def _row_to_email(row: sqlite3.Row) -> dict[str, str]:
+def _row_to_email(row: sqlite3.Row) -> dict[str, str | int | None]:
     return {
         "id": row["id"],
         "sender": row["sender"],
@@ -82,6 +101,7 @@ def _row_to_email(row: sqlite3.Row) -> dict[str, str]:
         "timestamp": row["timestamp"] or "",
         "html": row["html"] or "",
         "status": row["status"] or "new",
+        "mailbox_id": row["mailbox_id"] if row["mailbox_id"] is not None else None,
     }
 
 
@@ -106,6 +126,9 @@ def _row_to_case(row: sqlite3.Row) -> dict[str, Any]:
         "draft": row["draft"] or "",
         "created_at": row["created_at"] or "",
         "sent_at": row["sent_at"] if row["sent_at"] is not None else None,
+        "mailbox_id": row["mailbox_id"] if row["mailbox_id"] is not None else None,
+        "topic_id": row["topic_id"] if row["topic_id"] is not None else None,
+        "topic_raw": row["topic_raw"] or "",
     }
 
 
@@ -123,6 +146,7 @@ class Database:
         conn.row_factory = sqlite3.Row
         conn.execute(_SCHEMA)
         conn.execute(_ATTACHMENTS_SCHEMA)
+        conn.execute(_CASE_FIELD_VALUES_SCHEMA)
         try:
             conn.execute("ALTER TABLE emails ADD COLUMN html TEXT")
         except sqlite3.OperationalError:
@@ -131,15 +155,29 @@ class Database:
             conn.execute("ALTER TABLE emails ADD COLUMN sent_at TEXT")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE emails ADD COLUMN mailbox_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE emails ADD COLUMN topic_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE emails ADD COLUMN topic_raw TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         return conn
 
     def upsert_email(self, email: dict) -> bool:
         """Insert an email if not already present. Returns True if newly added."""
+        mailbox_id = email.get("mailbox_id")
         email_id = make_email_id(
             str(email.get("sender", "Unknown")),
             str(email.get("subject", "(no subject)")),
             str(email.get("timestamp", "")),
+            mailbox_id,
         )
         with self._lock:
             conn = self._connect()
@@ -147,8 +185,8 @@ class Database:
                 cur = conn.execute(
                     """
                     INSERT OR IGNORE INTO emails
-                        (id, sender, subject, body, timestamp, html)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (id, sender, subject, body, timestamp, html, mailbox_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         email_id,
@@ -157,6 +195,7 @@ class Database:
                         email.get("body", ""),
                         email.get("timestamp", ""),
                         email.get("html", ""),
+                        mailbox_id,
                     ),
                 )
                 added = cur.rowcount > 0
@@ -200,15 +239,23 @@ class Database:
             return None
         return row["content_type"] or "application/octet-stream", row["data"]
 
-    def list_emails(self) -> list[dict[str, str]]:
-        """Return all stored emails, newest first."""
+    def list_emails(self, mailbox_id: int | None = None) -> list[dict]:
+        """Return stored emails, newest first, optionally scoped to a mailbox."""
         with self._lock:
             conn = self._connect()
             try:
-                rows = conn.execute(
-                    f"SELECT {_EMAIL_COLUMNS}, status FROM emails "
-                    "ORDER BY timestamp DESC, rowid DESC"
-                ).fetchall()
+                if mailbox_id is None:
+                    rows = conn.execute(
+                        f"SELECT {_EMAIL_COLUMNS}, status FROM emails "
+                        "ORDER BY timestamp DESC, rowid DESC"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"SELECT {_EMAIL_COLUMNS}, status FROM emails "
+                        "WHERE mailbox_id = ? "
+                        "ORDER BY timestamp DESC, rowid DESC",
+                        (mailbox_id,),
+                    ).fetchall()
             finally:
                 conn.close()
         return [_row_to_email(row) for row in rows]
@@ -241,12 +288,12 @@ class Database:
                 conn.close()
 
     def mark_failed(self, email_id: str) -> bool:
-        """Reset a processing email back to 'new' after a failure."""
+        """Mark a processing email as failed (visible in the Failed tab)."""
         with self._lock:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    "UPDATE emails SET status = 'new' "
+                    "UPDATE emails SET status = 'failed' "
                     "WHERE id = ? AND status = 'processing'",
                     (email_id,),
                 )
@@ -255,16 +302,24 @@ class Database:
             finally:
                 conn.close()
 
-    def list_pending_ids(self) -> list[str]:
+    def list_pending_ids(self, mailbox_id: int | None = None) -> list[str]:
         """Return ids of all emails that have not been processed yet."""
         with self._lock:
             conn = self._connect()
             try:
-                rows = conn.execute(
-                    "SELECT id FROM emails "
-                    "WHERE status IN ('new', 'processing') "
-                    "ORDER BY timestamp ASC, rowid ASC"
-                ).fetchall()
+                if mailbox_id is None:
+                    rows = conn.execute(
+                        "SELECT id FROM emails "
+                        "WHERE status IN ('new', 'processing') "
+                        "ORDER BY timestamp ASC, rowid ASC"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id FROM emails "
+                        "WHERE status IN ('new', 'processing') AND mailbox_id = ? "
+                        "ORDER BY timestamp ASC, rowid ASC",
+                        (mailbox_id,),
+                    ).fetchall()
             finally:
                 conn.close()
         return [row["id"] for row in rows]
@@ -294,7 +349,9 @@ class Database:
                         custom = ?,
                         draft = ?,
                         created_at = ?,
-                        sent_at = NULL
+                        sent_at = NULL,
+                        topic_id = ?,
+                        topic_raw = ?
                     WHERE id = ?
                     """,
                     (
@@ -306,6 +363,8 @@ class Database:
                         custom_json,
                         draft,
                         created_at,
+                        classification.get("topic_id"),
+                        classification.get("topic_raw", ""),
                         email_id,
                     ),
                 )
@@ -378,16 +437,24 @@ class Database:
                 conn.close()
         return _row_to_case(row) if row is not None else None
 
-    def list_cases(self) -> list[dict[str, Any]]:
-        """Return all processed cases (emails with a draft), newest first."""
+    def list_cases(self, mailbox_id: int | None = None) -> list[dict[str, Any]]:
+        """Return processed cases (emails with a draft), newest first."""
         with self._lock:
             conn = self._connect()
             try:
-                rows = conn.execute(
-                    f"SELECT {_CASE_COLUMNS} "
-                    "FROM emails WHERE draft IS NOT NULL "
-                    "ORDER BY created_at DESC, rowid DESC"
-                ).fetchall()
+                if mailbox_id is None:
+                    rows = conn.execute(
+                        f"SELECT {_CASE_COLUMNS} "
+                        "FROM emails WHERE draft IS NOT NULL "
+                        "ORDER BY created_at DESC, rowid DESC"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"SELECT {_CASE_COLUMNS} "
+                        "FROM emails WHERE draft IS NOT NULL AND mailbox_id = ? "
+                        "ORDER BY created_at DESC, rowid DESC",
+                        (mailbox_id,),
+                    ).fetchall()
             finally:
                 conn.close()
         return [_row_to_case(row) for row in rows]
@@ -399,6 +466,89 @@ class Database:
             try:
                 conn.execute("DELETE FROM emails")
                 conn.execute("DELETE FROM attachments")
+                conn.execute("DELETE FROM case_field_values")
                 conn.commit()
             finally:
                 conn.close()
+
+    def backfill_missing_mailbox_ids(self, mailbox_id: int) -> int:
+        """Assign all emails with NULL mailbox_id to the given mailbox.
+
+        Used to migrate legacy emails that predate mailbox scoping. Returns
+        the number of rows updated.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE emails SET mailbox_id = ? WHERE mailbox_id IS NULL",
+                    (mailbox_id,),
+                )
+                conn.commit()
+                return cur.rowcount
+            finally:
+                conn.close()
+
+    def count_missing_mailbox_ids(self) -> int:
+        """Return the number of emails that still have NULL mailbox_id."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM emails WHERE mailbox_id IS NULL"
+                ).fetchone()
+            finally:
+                conn.close()
+        return int(row[0])
+
+    # ---- case field values ----
+
+    def get_case_field_values(self, case_id: str) -> dict[int, str]:
+        """Return {field_id: value_json} for a case."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT field_id, value_json FROM case_field_values "
+                    "WHERE case_id = ?",
+                    (case_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        return {row["field_id"]: row["value_json"] for row in rows}
+
+    def set_case_field_values(
+        self, case_id: str, values: dict[int, str]
+    ) -> None:
+        """Upsert case field values keyed by field_id (JSON-encoded values)."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                for field_id, value_json in values.items():
+                    conn.execute(
+                        """
+                        INSERT INTO case_field_values (case_id, field_id, value_json)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(case_id, field_id) DO UPDATE SET
+                            value_json = excluded.value_json
+                        """,
+                        (case_id, int(field_id), value_json),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def delete_case_field_value(self, case_id: str, field_id: int) -> bool:
+        """Delete a single case field value. Returns True if a row was removed."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM case_field_values "
+                    "WHERE case_id = ? AND field_id = ?",
+                    (case_id, int(field_id)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]

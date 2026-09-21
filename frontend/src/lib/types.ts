@@ -6,6 +6,7 @@ export interface EmailItem {
   timestamp: string
   html: string
   status: string
+  mailbox_id: number | null
 }
 
 export interface Classification {
@@ -24,6 +25,19 @@ export interface Case {
   draft: string
   created_at: string
   sent_at: string | null
+  mailbox_id: number | null
+  topic_id: number | null
+  topic_raw: string
+}
+
+export interface CaseField {
+  field_id: number
+  key: string
+  name: string
+  type: string
+  required: boolean
+  options: string[]
+  value: unknown
 }
 
 export interface CategoryDatum {
@@ -96,6 +110,7 @@ export interface TestResult {
 
 export interface MailAccount {
   id: number
+  name: string
   address: string
   imap_host: string
   imap_port: number
@@ -103,19 +118,184 @@ export interface MailAccount {
   smtp_port: number
   password: string
   has_password: boolean
-  folder: string
   max_emails: number
   enabled: boolean
 }
 
 export interface MailAccountIn {
+  name: string
   address: string
   imap_host: string
   imap_port: number
   smtp_host: string
   smtp_port: number
   password: string
-  folder: string
   max_emails: number
   enabled: boolean
+}
+
+export interface Mailbox {
+  id: number
+  name: string
+  address: string
+  purpose: string
+  status: string
+  imap_host: string
+  imap_port: number
+  imap_security: string
+  imap_folder: string
+  smtp_host: string
+  smtp_port: number
+  smtp_security: string
+  has_password: boolean
+  max_emails: number
+  auto_process: boolean
+  generate_drafts: boolean
+  human_approval: boolean
+  classifier_config_id: number | null
+  drafter_config_id: number | null
+  classifier_temperature: number | null
+  classifier_max_tokens: number | null
+  drafter_temperature: number | null
+  drafter_max_tokens: number | null
+  use_knowledge: boolean
+  instructions: string
+}
+
+export interface MailboxIn {
+  name: string
+  address: string
+  purpose: string
+  status: string
+  imap_host: string
+  imap_port: number
+  imap_security: string
+  imap_folder: string
+  smtp_host: string
+  smtp_port: number
+  smtp_security: string
+  password: string
+  max_emails: number
+  auto_process: boolean
+  generate_drafts: boolean
+  human_approval: boolean
+  classifier_config_id: number | null
+  drafter_config_id: number | null
+  classifier_temperature: number | null
+  classifier_max_tokens: number | null
+  drafter_temperature: number | null
+  drafter_max_tokens: number | null
+  use_knowledge: boolean
+  instructions: string
+}
+
+export interface Topic {
+  id: number
+  mailbox_id: number
+  name: string
+  description: string
+  examples: string
+  status: string
+}
+
+export interface TopicIn {
+  name: string
+  description: string
+  examples: string
+  status: string
+}
+
+export interface CustomField {
+  id: number
+  mailbox_id: number
+  name: string
+  type: string
+  required: boolean
+  options: string
+  status: string
+}
+
+export interface CustomFieldIn {
+  name: string
+  type: string
+  required: boolean
+  options: string
+  status: string
+}
+
+export interface KnowledgeSource {
+  id: number
+  name: string
+  type: string
+  status: string
+  chunks: number
+  content: string
+}
+
+export interface KnowledgeSourceIn {
+  name: string
+  type: string
+  status: string
+  chunks: number
+  content: string
+}
+
+export interface RetrievalResult {
+  chunk_id: number
+  document_id: number
+  source_id: number
+  title: string
+  content: string
+  score: number
+  metadata: Record<string, unknown>
+}
+
+export interface ToolDescriptor {
+  connector_id: number
+  name: string
+  description: string
+  risk_level: string
+  enabled: boolean
+  permission_level: string
+}
+
+export interface ProcessingRun {
+  id: number
+  trace_id: string | null
+  mailbox_id: number | null
+  email_id: string | null
+  case_id: string | null
+  stage: string
+  status: string
+  provider: string | null
+  model: string | null
+  started_at: string | null
+  completed_at: string | null
+  latency_ms: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  metadata: Record<string, unknown>
+  error_type: string | null
+  error_message: string | null
+}
+
+export interface Connector {
+  id: number
+  name: string
+  type: string
+  server: string
+  status: string
+}
+
+export interface MailboxConnector extends Connector {
+  enabled: boolean
+  allowed_tools: string
+}
+
+export interface ConnectorIn {
+  name: string
+  type: string
+  server: string
+  status: string
 }

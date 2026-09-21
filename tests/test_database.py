@@ -190,7 +190,7 @@ def test_processing_status_lifecycle(tmp_path) -> None:
     assert db.list_emails()[0]["status"] == "processed"
 
 
-def test_mark_failed_resets_processing(tmp_path) -> None:
+def test_mark_failed_persists_failed_status(tmp_path) -> None:
     db = Database(str(tmp_path / "emails.db"))
     email_id = make_email_id(
         EMAIL["sender"], EMAIL["subject"], EMAIL["timestamp"]
@@ -198,7 +198,9 @@ def test_mark_failed_resets_processing(tmp_path) -> None:
     db.upsert_email(EMAIL)
     db.mark_processing(email_id)
     assert db.mark_failed(email_id) is True
-    assert db.list_emails()[0]["status"] == "new"
+    assert db.list_emails()[0]["status"] == "failed"
+    # Failed emails are not auto-retried by the pending queue.
+    assert db.list_pending_ids() == []
     # Marking failed on a non-processing email is a no-op.
     assert db.mark_failed(email_id) is False
     assert db.mark_processing("nope") is False

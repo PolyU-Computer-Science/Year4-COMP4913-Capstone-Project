@@ -5,6 +5,13 @@ Stores:
 - ``settings`` — global per-stage settings (system prompt, task prompt,
   generation params) for the ``classification`` and ``draft`` stages.
 - ``mail_accounts`` — IMAP mail accounts.
+- ``mailboxes`` — business email contexts (name, purpose, connection, AI
+  behaviour, instructions) that group topics, fields, knowledge and connectors.
+- ``topics`` / ``custom_fields`` — per-mailbox taxonomy and custom fields.
+- ``knowledge_sources`` — global reusable knowledge resources, assigned to
+  mailboxes via ``mailbox_knowledge``.
+- ``connectors`` — global external tools (MCP), enabled per mailbox with
+  per-tool permissions via ``mailbox_connectors``.
 
 Environment variables remain the defaults; values saved here override them at
 runtime. API keys and mail passwords are encrypted with Fernet before being
@@ -16,6 +23,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -104,18 +112,29 @@ class SettingsStore:
                     """
                     CREATE TABLE IF NOT EXISTS mail_accounts (
                         id INTEGER PRIMARY KEY,
+                        name TEXT DEFAULT '',
                         address TEXT NOT NULL,
                         imap_host TEXT,
                         imap_port INTEGER,
                         smtp_host TEXT,
                         smtp_port INTEGER,
                         password TEXT,
-                        folder TEXT DEFAULT 'INBOX',
                         max_emails INTEGER DEFAULT 50,
                         enabled INTEGER DEFAULT 1
                     )
                     """
                 )
+                for column, col_type in (
+                    ("name", "TEXT DEFAULT ''"),
+                    ("max_emails", "INTEGER DEFAULT 50"),
+                ):
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE mail_accounts ADD COLUMN {column} {col_type}"
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                self._create_mailbox_tables(conn)
                 conn.commit()
             finally:
                 conn.close()
@@ -125,6 +144,128 @@ class SettingsStore:
 
     def _decrypt(self, token: str) -> str:
         return self._fernet.decrypt(token.encode()).decode()
+
+    @staticmethod
+    def _create_mailbox_tables(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mailboxes (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                address TEXT NOT NULL DEFAULT '',
+                purpose TEXT DEFAULT '',
+                status TEXT DEFAULT 'active',
+                imap_host TEXT DEFAULT '',
+                imap_port INTEGER DEFAULT 993,
+                imap_security TEXT DEFAULT 'ssl',
+                imap_folder TEXT DEFAULT 'INBOX',
+                smtp_host TEXT DEFAULT '',
+                smtp_port INTEGER DEFAULT 587,
+                smtp_security TEXT DEFAULT 'starttls',
+                password TEXT DEFAULT '',
+                max_emails INTEGER DEFAULT 50,
+                auto_process INTEGER DEFAULT 0,
+                generate_drafts INTEGER DEFAULT 1,
+                human_approval INTEGER DEFAULT 1,
+                classifier_config_id INTEGER,
+                drafter_config_id INTEGER,
+                classifier_temperature REAL,
+                classifier_max_tokens INTEGER,
+                drafter_temperature REAL,
+                drafter_max_tokens INTEGER,
+                use_knowledge INTEGER DEFAULT 0,
+                instructions TEXT DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS topics (
+                id INTEGER PRIMARY KEY,
+                mailbox_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                examples TEXT DEFAULT '',
+                status TEXT DEFAULT 'active'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS custom_fields (
+                id INTEGER PRIMARY KEY,
+                mailbox_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT DEFAULT 'text',
+                required INTEGER DEFAULT 0,
+                options TEXT DEFAULT '',
+                status TEXT DEFAULT 'active'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_sources (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT DEFAULT 'document',
+                status TEXT DEFAULT 'ready',
+                chunks INTEGER DEFAULT 0
+            )
+            """
+        )
+        try:
+            conn.execute(
+                "ALTER TABLE knowledge_sources ADD COLUMN content TEXT DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mailbox_knowledge (
+                mailbox_id INTEGER NOT NULL,
+                source_id INTEGER NOT NULL,
+                PRIMARY KEY (mailbox_id, source_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS connectors (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT DEFAULT 'mcp',
+                server TEXT DEFAULT '',
+                status TEXT DEFAULT 'disconnected'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mailbox_connectors (
+                mailbox_id INTEGER NOT NULL,
+                connector_id INTEGER NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                allowed_tools TEXT DEFAULT '',
+                PRIMARY KEY (mailbox_id, connector_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS connector_tool_permissions (
+                id INTEGER PRIMARY KEY,
+                mailbox_id INTEGER NOT NULL,
+                connector_id INTEGER NOT NULL,
+                tool_name TEXT NOT NULL,
+                enabled INTEGER DEFAULT 0,
+                permission_level TEXT DEFAULT 'read',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(mailbox_id, connector_id, tool_name)
+            )
+            """
+        )
 
     # ---- AI configs ----
 
@@ -414,6 +555,7 @@ class SettingsStore:
         accounts = []
         for row in rows:
             account = dict(row)
+            account["name"] = str(account.get("name") or "")
             account["enabled"] = bool(account["enabled"])
             encrypted = account.get("password") or ""
             if mask_secrets:
@@ -440,6 +582,7 @@ class SettingsStore:
             return None
 
         account = dict(row)
+        account["name"] = str(account.get("name") or "")
         account["enabled"] = bool(account["enabled"])
         encrypted = account.get("password") or ""
         if mask_secrets:
@@ -464,6 +607,7 @@ class SettingsStore:
             return None
 
         account = dict(row)
+        account["name"] = str(account.get("name") or "")
         account["enabled"] = bool(account["enabled"])
         encrypted = account.get("password") or ""
         account["password"] = self._decrypt(encrypted) if encrypted else ""
@@ -478,18 +622,18 @@ class SettingsStore:
                 cur = conn.execute(
                     """
                     INSERT INTO mail_accounts
-                        (address, imap_host, imap_port, smtp_host, smtp_port,
-                         password, folder, max_emails, enabled)
+                        (name, address, imap_host, imap_port, smtp_host, smtp_port,
+                         password, max_emails, enabled)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        str(data.get("name", "") or ""),
                         str(data.get("address", "")),
                         str(data.get("imap_host", "")),
                         int(data.get("imap_port", 993)),
                         str(data.get("smtp_host", "")),
                         int(data.get("smtp_port", 587)),
                         encrypted,
-                        str(data.get("folder", "INBOX") or "INBOX"),
                         int(data.get("max_emails", 50)),
                         1 if data.get("enabled", True) else 0,
                     ),
@@ -522,19 +666,19 @@ class SettingsStore:
                 conn.execute(
                     """
                     UPDATE mail_accounts
-                    SET address = ?, imap_host = ?, imap_port = ?,
+                    SET name = ?, address = ?, imap_host = ?, imap_port = ?,
                         smtp_host = ?, smtp_port = ?, password = ?,
-                        folder = ?, max_emails = ?, enabled = ?
+                        max_emails = ?, enabled = ?
                     WHERE id = ?
                     """,
                     (
+                        str(merged.get("name", "") or ""),
                         str(merged.get("address", "")),
                         str(merged.get("imap_host", "")),
                         int(merged.get("imap_port", 993)),
                         str(merged.get("smtp_host", "")),
                         int(merged.get("smtp_port", 587)),
                         encrypted,
-                        str(merged.get("folder", "INBOX") or "INBOX"),
                         int(merged.get("max_emails", 50)),
                         1 if merged.get("enabled", True) else 0,
                         account_id,
@@ -557,3 +701,818 @@ class SettingsStore:
             finally:
                 conn.close()
         return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- mailboxes ----
+
+    def _mailbox_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        mailbox = dict(row)
+        for field in (
+            "imap_port",
+            "smtp_port",
+            "max_emails",
+            "classifier_config_id",
+            "drafter_config_id",
+            "classifier_max_tokens",
+            "drafter_max_tokens",
+        ):
+            value = mailbox.get(field)
+            mailbox[field] = int(value) if value is not None else None
+        for field in (
+            "classifier_temperature",
+            "drafter_temperature",
+        ):
+            value = mailbox.get(field)
+            mailbox[field] = float(value) if value is not None else None
+        for field in ("auto_process", "generate_drafts", "human_approval", "use_knowledge"):
+            mailbox[field] = bool(mailbox.get(field))
+        return mailbox
+
+    def list_mailboxes(self) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM mailboxes ORDER BY id"
+                ).fetchall()
+            finally:
+                conn.close()
+        return [self._mailbox_row_to_dict(row) for row in rows]
+
+    def get_mailbox_by_name(self, name: str) -> dict[str, Any] | None:
+        """Return a mailbox by exact name, or None."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM mailboxes WHERE name = ?", (name,)
+                ).fetchone()
+            finally:
+                conn.close()
+        return self._mailbox_row_to_dict(row) if row is not None else None
+
+    def get_mailbox(self, mailbox_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        return self._mailbox_row_to_dict(row) if row is not None else None
+
+    def create_mailbox(self, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO mailboxes (
+                        name, address, purpose, status, imap_host, imap_port,
+                        imap_security, imap_folder, smtp_host, smtp_port,
+                        smtp_security, password, max_emails, auto_process,
+                        generate_drafts, human_approval, classifier_config_id,
+                        drafter_config_id, classifier_temperature,
+                        classifier_max_tokens, drafter_temperature,
+                        drafter_max_tokens, use_knowledge, instructions
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(data.get("name", "")),
+                        str(data.get("address", "")),
+                        str(data.get("purpose", "")),
+                        str(data.get("status", "active")),
+                        str(data.get("imap_host", "")),
+                        int(data.get("imap_port", 993)),
+                        str(data.get("imap_security", "ssl")),
+                        str(data.get("imap_folder", "INBOX")),
+                        str(data.get("smtp_host", "")),
+                        int(data.get("smtp_port", 587)),
+                        str(data.get("smtp_security", "starttls")),
+                        "",
+                        int(data.get("max_emails", 50)),
+                        1 if data.get("auto_process") else 0,
+                        1 if data.get("generate_drafts", True) else 0,
+                        1 if data.get("human_approval", True) else 0,
+                        data.get("classifier_config_id"),
+                        data.get("drafter_config_id"),
+                        data.get("classifier_temperature"),
+                        data.get("classifier_max_tokens"),
+                        data.get("drafter_temperature"),
+                        data.get("drafter_max_tokens"),
+                        1 if data.get("use_knowledge") else 0,
+                        str(data.get("instructions", "")),
+                    ),
+                )
+                mailbox_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+
+        mailbox = self.get_mailbox(mailbox_id)  # type: ignore[arg-type]
+        assert mailbox is not None
+        return mailbox
+
+    def update_mailbox(
+        self, mailbox_id: int, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        existing = self.get_mailbox(mailbox_id)
+        if existing is None:
+            return None
+        merged = {**existing, **data}
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE mailboxes
+                    SET name = ?, address = ?, purpose = ?, status = ?,
+                        imap_host = ?, imap_port = ?, imap_security = ?,
+                        imap_folder = ?, smtp_host = ?, smtp_port = ?,
+                        smtp_security = ?, max_emails = ?, auto_process = ?,
+                        generate_drafts = ?, human_approval = ?,
+                        classifier_config_id = ?, drafter_config_id = ?,
+                        classifier_temperature = ?, classifier_max_tokens = ?,
+                        drafter_temperature = ?, drafter_max_tokens = ?,
+                        use_knowledge = ?, instructions = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(merged.get("name", "")),
+                        str(merged.get("address", "")),
+                        str(merged.get("purpose", "")),
+                        str(merged.get("status", "active")),
+                        str(merged.get("imap_host", "")),
+                        int(merged.get("imap_port", 993)),
+                        str(merged.get("imap_security", "ssl")),
+                        str(merged.get("imap_folder", "INBOX")),
+                        str(merged.get("smtp_host", "")),
+                        int(merged.get("smtp_port", 587)),
+                        str(merged.get("smtp_security", "starttls")),
+                        int(merged.get("max_emails", 50)),
+                        1 if merged.get("auto_process") else 0,
+                        1 if merged.get("generate_drafts", True) else 0,
+                        1 if merged.get("human_approval", True) else 0,
+                        merged.get("classifier_config_id"),
+                        merged.get("drafter_config_id"),
+                        merged.get("classifier_temperature"),
+                        merged.get("classifier_max_tokens"),
+                        merged.get("drafter_temperature"),
+                        merged.get("drafter_max_tokens"),
+                        1 if merged.get("use_knowledge") else 0,
+                        str(merged.get("instructions", "")),
+                        mailbox_id,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        return self.get_mailbox(mailbox_id)
+
+    def set_mailbox_password(self, mailbox_id: int, password: str) -> bool:
+        """Store an encrypted IMAP/SMTP password for a mailbox."""
+        if self.get_mailbox(mailbox_id) is None:
+            return False
+        encrypted = self._encrypt(password) if password else ""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "UPDATE mailboxes SET password = ? WHERE id = ?",
+                    (encrypted, mailbox_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return True
+
+    def get_mailbox_password(self, mailbox_id: int) -> str | None:
+        """Return the decrypted mailbox password, or None."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT password FROM mailboxes WHERE id = ?", (mailbox_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None or not row["password"]:
+            return None
+        return self._decrypt(row["password"])
+
+    def delete_mailbox(self, mailbox_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM mailboxes WHERE id = ?", (mailbox_id,)
+                )
+                conn.execute(
+                    "DELETE FROM mailbox_knowledge WHERE mailbox_id = ?",
+                    (mailbox_id,),
+                )
+                conn.execute(
+                    "DELETE FROM mailbox_connectors WHERE mailbox_id = ?",
+                    (mailbox_id,),
+                )
+                conn.execute(
+                    "DELETE FROM topics WHERE mailbox_id = ?", (mailbox_id,)
+                )
+                conn.execute(
+                    "DELETE FROM custom_fields WHERE mailbox_id = ?", (mailbox_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- topics ----
+
+    def list_topics(self, mailbox_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM topics WHERE mailbox_id = ? ORDER BY id",
+                    (mailbox_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        topics = []
+        for row in rows:
+            topic = dict(row)
+            topic["status"] = topic.get("status") or "active"
+            topic["examples"] = topic.get("examples") or ""
+            topics.append(topic)
+        return topics
+
+    def create_topic(self, mailbox_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO topics (mailbox_id, name, description, examples, status)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mailbox_id,
+                        str(data.get("name", "")),
+                        str(data.get("description", "")),
+                        str(data.get("examples", "")),
+                        str(data.get("status", "active")),
+                    ),
+                )
+                topic_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_topic(topic_id)  # type: ignore[arg-type]
+
+    def get_topic(self, topic_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM topics WHERE id = ?", (topic_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        topic = dict(row)
+        topic["status"] = topic.get("status") or "active"
+        topic["examples"] = topic.get("examples") or ""
+        return topic
+
+    def update_topic(self, topic_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        existing = self.get_topic(topic_id)
+        if existing is None:
+            return None
+        merged = {**existing, **data}
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE topics SET name = ?, description = ?, examples = ?,
+                        status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(merged.get("name", "")),
+                        str(merged.get("description", "")),
+                        str(merged.get("examples", "")),
+                        str(merged.get("status", "active")),
+                        topic_id,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_topic(topic_id)
+
+    def delete_topic(self, topic_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- custom fields ----
+
+    def list_custom_fields(self, mailbox_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM custom_fields WHERE mailbox_id = ? ORDER BY id",
+                    (mailbox_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        fields = []
+        for row in rows:
+            field = dict(row)
+            field["type"] = field.get("type") or "text"
+            field["required"] = bool(field.get("required"))
+            field["status"] = field.get("status") or "active"
+            field["options"] = field.get("options") or ""
+            fields.append(field)
+        return fields
+
+    def create_custom_field(
+        self, mailbox_id: int, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO custom_fields
+                        (mailbox_id, name, type, required, options, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mailbox_id,
+                        str(data.get("name", "")),
+                        str(data.get("type", "text")),
+                        1 if data.get("required") else 0,
+                        str(data.get("options", "")),
+                        str(data.get("status", "active")),
+                    ),
+                )
+                field_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_custom_field(field_id)  # type: ignore[arg-type]
+
+    def get_custom_field(self, field_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM custom_fields WHERE id = ?", (field_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        field = dict(row)
+        field["type"] = field.get("type") or "text"
+        field["required"] = bool(field.get("required"))
+        field["status"] = field.get("status") or "active"
+        field["options"] = field.get("options") or ""
+        return field
+
+    def update_custom_field(
+        self, field_id: int, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        existing = self.get_custom_field(field_id)
+        if existing is None:
+            return None
+        merged = {**existing, **data}
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE custom_fields SET name = ?, type = ?, required = ?,
+                        options = ?, status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(merged.get("name", "")),
+                        str(merged.get("type", "text")),
+                        1 if merged.get("required") else 0,
+                        str(merged.get("options", "")),
+                        str(merged.get("status", "active")),
+                        field_id,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_custom_field(field_id)
+
+    def delete_custom_field(self, field_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM custom_fields WHERE id = ?", (field_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- knowledge sources ----
+
+    def list_knowledge_sources(self) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM knowledge_sources ORDER BY id"
+                ).fetchall()
+            finally:
+                conn.close()
+        sources = []
+        for row in rows:
+            source = dict(row)
+            source["type"] = source.get("type") or "document"
+            source["status"] = source.get("status") or "ready"
+            source["chunks"] = int(source.get("chunks") or 0)
+            sources.append(source)
+        return sources
+
+    def get_knowledge_source(self, source_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM knowledge_sources WHERE id = ?", (source_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        source = dict(row)
+        source["type"] = source.get("type") or "document"
+        source["status"] = source.get("status") or "ready"
+        source["chunks"] = int(source.get("chunks") or 0)
+        return source
+
+    def create_knowledge_source(self, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO knowledge_sources (name, type, status, chunks, content)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(data.get("name", "")),
+                        str(data.get("type", "document")),
+                        str(data.get("status", "ready")),
+                        int(data.get("chunks", 0)),
+                        str(data.get("content", "")),
+                    ),
+                )
+                source_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_knowledge_source(source_id)  # type: ignore[arg-type]
+
+    def update_knowledge_source(
+        self, source_id: int, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        existing = self.get_knowledge_source(source_id)
+        if existing is None:
+            return None
+        merged = {**existing, **data}
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE knowledge_sources SET name = ?, type = ?, status = ?,
+                        chunks = ?, content = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(merged.get("name", "")),
+                        str(merged.get("type", "document")),
+                        str(merged.get("status", "ready")),
+                        int(merged.get("chunks", 0)),
+                        str(merged.get("content", "")),
+                        source_id,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_knowledge_source(source_id)
+
+    def delete_knowledge_source(self, source_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM knowledge_sources WHERE id = ?", (source_id,)
+                )
+                conn.execute(
+                    "DELETE FROM mailbox_knowledge WHERE source_id = ?", (source_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    def list_mailbox_knowledge(self, mailbox_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT ks.* FROM knowledge_sources ks
+                    JOIN mailbox_knowledge mk ON mk.source_id = ks.id
+                    WHERE mk.mailbox_id = ?
+                    ORDER BY ks.id
+                    """,
+                    (mailbox_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        sources = []
+        for row in rows:
+            source = dict(row)
+            source["type"] = source.get("type") or "document"
+            source["status"] = source.get("status") or "ready"
+            source["chunks"] = int(source.get("chunks") or 0)
+            sources.append(source)
+        return sources
+
+    def assign_knowledge(self, mailbox_id: int, source_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO mailbox_knowledge (mailbox_id, source_id) "
+                    "VALUES (?, ?)",
+                    (mailbox_id, source_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return True
+
+    def unassign_knowledge(self, mailbox_id: int, source_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM mailbox_knowledge WHERE mailbox_id = ? AND source_id = ?",
+                    (mailbox_id, source_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- connectors ----
+
+    def list_connectors(self) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute("SELECT * FROM connectors ORDER BY id").fetchall()
+            finally:
+                conn.close()
+        connectors = []
+        for row in rows:
+            connector = dict(row)
+            connector["type"] = connector.get("type") or "mcp"
+            connector["status"] = connector.get("status") or "disconnected"
+            connectors.append(connector)
+        return connectors
+
+    def get_connector(self, connector_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM connectors WHERE id = ?", (connector_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        if row is None:
+            return None
+        connector = dict(row)
+        connector["type"] = connector.get("type") or "mcp"
+        connector["status"] = connector.get("status") or "disconnected"
+        return connector
+
+    def create_connector(self, data: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO connectors (name, type, server, status)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        str(data.get("name", "")),
+                        str(data.get("type", "mcp")),
+                        str(data.get("server", "")),
+                        str(data.get("status", "disconnected")),
+                    ),
+                )
+                connector_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_connector(connector_id)  # type: ignore[arg-type]
+
+    def update_connector(
+        self, connector_id: int, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        existing = self.get_connector(connector_id)
+        if existing is None:
+            return None
+        merged = {**existing, **data}
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    UPDATE connectors SET name = ?, type = ?, server = ?, status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(merged.get("name", "")),
+                        str(merged.get("type", "mcp")),
+                        str(merged.get("server", "")),
+                        str(merged.get("status", "disconnected")),
+                        connector_id,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_connector(connector_id)
+
+    def delete_connector(self, connector_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM connectors WHERE id = ?", (connector_id,)
+                )
+                conn.execute(
+                    "DELETE FROM mailbox_connectors WHERE connector_id = ?",
+                    (connector_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    def list_mailbox_connectors(self, mailbox_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT c.*, mc.enabled AS mailbox_enabled,
+                           mc.allowed_tools AS allowed_tools
+                    FROM connectors c
+                    JOIN mailbox_connectors mc ON mc.connector_id = c.id
+                    WHERE mc.mailbox_id = ?
+                    ORDER BY c.id
+                    """,
+                    (mailbox_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        connectors = []
+        for row in rows:
+            connector = dict(row)
+            connector["type"] = connector.get("type") or "mcp"
+            connector["status"] = connector.get("status") or "disconnected"
+            connector["enabled"] = bool(connector.get("mailbox_enabled"))
+            connector["allowed_tools"] = connector.get("allowed_tools") or ""
+            connector.pop("mailbox_enabled", None)
+            connectors.append(connector)
+        return connectors
+
+    def assign_connector(
+        self, mailbox_id: int, connector_id: int, data: dict[str, Any]
+    ) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO mailbox_connectors
+                        (mailbox_id, connector_id, enabled, allowed_tools)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(mailbox_id, connector_id) DO UPDATE SET
+                        enabled = excluded.enabled,
+                        allowed_tools = excluded.allowed_tools
+                    """,
+                    (
+                        mailbox_id,
+                        connector_id,
+                        1 if data.get("enabled", True) else 0,
+                        str(data.get("allowed_tools", "")),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return True
+
+    def unassign_connector(self, mailbox_id: int, connector_id: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM mailbox_connectors WHERE mailbox_id = ? AND connector_id = ?",
+                    (mailbox_id, connector_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return cur.rowcount > 0  # type: ignore[possibly-undefined]
+
+    # ---- connector tool permissions ----
+
+    def list_tool_permissions(
+        self, mailbox_id: int, connector_id: int
+    ) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM connector_tool_permissions "
+                    "WHERE mailbox_id = ? AND connector_id = ?",
+                    (mailbox_id, connector_id),
+                ).fetchall()
+            finally:
+                conn.close()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = dict(row)
+            item["enabled"] = bool(item.get("enabled"))
+            result[item["tool_name"]] = item
+        return result
+
+    def set_tool_permissions(
+        self,
+        mailbox_id: int,
+        connector_id: int,
+        permissions: dict[str, dict[str, Any]],
+    ) -> None:
+        """Upsert tool permissions for a connector. Unknown tools default deny."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._connect()
+            try:
+                for tool_name, data in permissions.items():
+                    conn.execute(
+                        """
+                        INSERT INTO connector_tool_permissions
+                            (mailbox_id, connector_id, tool_name, enabled,
+                             permission_level, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(mailbox_id, connector_id, tool_name) DO UPDATE SET
+                            enabled = excluded.enabled,
+                            permission_level = excluded.permission_level,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            mailbox_id,
+                            connector_id,
+                            str(tool_name),
+                            1 if data.get("enabled") else 0,
+                            str(data.get("permission_level", "read")),
+                            now,
+                            now,
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()

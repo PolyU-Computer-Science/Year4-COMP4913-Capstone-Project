@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Pencil, Plug, Plus, Star, Trash2 } from 'lucide-react'
 
-import { PageHeading } from '@/components/page-heading'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { EmptyState } from '@/components/empty-state'
+import { PageHeader } from '@/components/page-header'
+import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -22,8 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -37,18 +38,11 @@ import {
   createAIConfig,
   deleteAIConfig,
   fetchAIConfigs,
-  fetchStages,
-  saveStages,
   testAIConfig,
   testSavedAIConfig,
   updateAIConfig,
 } from '@/lib/api'
-import type {
-  AIConfig,
-  AIConfigIn,
-  StageConfig,
-  StagesSettings,
-} from '@/lib/types'
+import type { AIConfig, AIConfigIn } from '@/lib/types'
 import { toast } from 'sonner'
 
 const PROVIDERS = [
@@ -85,25 +79,7 @@ const EMPTY_CONFIG: ConfigForm = {
   enabled: true,
 }
 
-interface StageForm {
-  role: string
-  goal: string
-  backstory: string
-  prompt: string
-  max_tokens: string
-  temperature: string
-}
-
-const EMPTY_STAGE: StageForm = {
-  role: '',
-  goal: '',
-  backstory: '',
-  prompt: '',
-  max_tokens: '',
-  temperature: '',
-}
-
-function toConfigPayload(form: ConfigForm): AIConfigIn {
+function toPayload(form: ConfigForm): AIConfigIn {
   return {
     name: form.name,
     provider: form.provider,
@@ -131,55 +107,22 @@ function configToForm(config: AIConfig): ConfigForm {
   }
 }
 
-function toStagePayload(form: StageForm): StageConfig {
-  return {
-    role: form.role,
-    goal: form.goal,
-    backstory: form.backstory,
-    prompt: form.prompt,
-    max_tokens: form.max_tokens === '' ? null : Number(form.max_tokens),
-    temperature: form.temperature === '' ? null : Number(form.temperature),
-  }
-}
-
-function stageToForm(stage: StageConfig): StageForm {
-  return {
-    role: stage.role,
-    goal: stage.goal,
-    backstory: stage.backstory,
-    prompt: stage.prompt,
-    max_tokens: stage.max_tokens === null ? '' : String(stage.max_tokens),
-    temperature:
-      stage.temperature === null ? '' : String(stage.temperature),
-  }
-}
-
-export default function AISettingsPage() {
+export default function AIModelsPage() {
   const [configs, setConfigs] = useState<AIConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [stagesOpen, setStagesOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [hasKey, setHasKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)
+  const [toDelete, setToDelete] = useState<AIConfig | null>(null)
   const [configForm, setConfigForm] = useState<ConfigForm>(EMPTY_CONFIG)
-
-  const [classification, setClassification] = useState<StageForm>(EMPTY_STAGE)
-  const [draft, setDraft] = useState<StageForm>(EMPTY_STAGE)
-  const [savingStages, setSavingStages] = useState(false)
 
   async function reload() {
     try {
-      const [configList, stages] = await Promise.all([
-        fetchAIConfigs(),
-        fetchStages(),
-      ])
-      setConfigs(configList)
-      setClassification(stageToForm(stages.classification))
-      setDraft(stageToForm(stages.draft))
+      setConfigs(await fetchAIConfigs())
     } catch {
-      toast.error('Failed to load AI settings')
+      toast.error('Failed to load AI models')
     } finally {
       setLoading(false)
     }
@@ -189,20 +132,8 @@ export default function AISettingsPage() {
     reload()
   }, [])
 
-  function setConfig<K extends keyof ConfigForm>(
-    key: K,
-    value: ConfigForm[K],
-  ) {
+  function setConfig<K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) {
     setConfigForm((prev) => ({ ...prev, [key]: value }))
-  }
-
-  function setStage(
-    stage: 'classification' | 'draft',
-    key: keyof StageForm,
-    value: string,
-  ) {
-    const setter = stage === 'classification' ? setClassification : setDraft
-    setter((prev) => ({ ...prev, [key]: value }))
   }
 
   function openCreate() {
@@ -222,18 +153,18 @@ export default function AISettingsPage() {
   async function handleSave() {
     setSaving(true)
     try {
-      const payload = toConfigPayload(configForm)
+      const payload = toPayload(configForm)
       if (editingId === null) {
         await createAIConfig(payload)
-        toast.success('AI configuration created')
+        toast.success('AI model created')
       } else {
         await updateAIConfig(editingId, payload)
-        toast.success('AI configuration updated')
+        toast.success('AI model updated')
       }
       setDialogOpen(false)
       await reload()
     } catch {
-      toast.error('Failed to save AI configuration')
+      toast.error('Failed to save AI model')
     } finally {
       setSaving(false)
     }
@@ -242,20 +173,20 @@ export default function AISettingsPage() {
   async function handleDelete(config: AIConfig) {
     try {
       await deleteAIConfig(config.id)
-      toast.success('AI configuration deleted')
+      toast.success('AI model deleted')
       await reload()
     } catch {
-      toast.error('Failed to delete AI configuration')
+      toast.error('Failed to delete AI model')
     }
   }
 
   async function handleActivate(config: AIConfig) {
     try {
       await activateAIConfig(config.id)
-      toast.success('Active configuration changed')
+      toast.success('Active model changed')
       await reload()
     } catch {
-      toast.error('Failed to activate AI configuration')
+      toast.error('Failed to activate AI model')
     }
   }
 
@@ -275,7 +206,7 @@ export default function AISettingsPage() {
   async function handleTestDialog() {
     setSaving(true)
     try {
-      const result = await testAIConfig(toConfigPayload(configForm))
+      const result = await testAIConfig(toPayload(configForm))
       if (result.ok) toast.success(result.message)
       else toast.error(result.message)
     } catch {
@@ -285,40 +216,18 @@ export default function AISettingsPage() {
     }
   }
 
-  async function handleSaveStages() {
-    setSavingStages(true)
-    try {
-      const payload: StagesSettings = {
-        classification: toStagePayload(classification),
-        draft: toStagePayload(draft),
-      }
-      await saveStages(payload)
-      toast.success('Prompts & parameters saved')
-      setStagesOpen(false)
-    } catch {
-      toast.error('Failed to save prompts & parameters')
-    } finally {
-      setSavingStages(false)
-    }
-  }
-
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PageHeading
-          title="AI Settings"
-          subtitle="Configure LLM providers and per-stage prompts"
-        />
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setStagesOpen(true)}>
-            Prompts & Parameters
-          </Button>
+      <PageHeader
+        title="AI Models"
+        description="Manage model configurations available to mailboxes."
+        action={
           <Button onClick={openCreate}>
             <Plus />
-            New Config
+            Add Model
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       <Card>
         <CardContent>
@@ -327,9 +236,11 @@ export default function AISettingsPage() {
               <Loader2 className="animate-spin" /> Loading…
             </div>
           ) : configs.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground">
-              No AI configurations yet. Add one to use a real model.
-            </p>
+            <EmptyState
+              icon={Plug}
+              title="No AI models"
+              description="Add a model configuration to power classification and drafting."
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -354,9 +265,7 @@ export default function AISettingsPage() {
                           Active
                         </Badge>
                       ) : (
-                        <span className="text-sm text-muted-foreground">
-                          Inactive
-                        </span>
+                        <StatusBadge status="neutral" label="Inactive" />
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -394,7 +303,7 @@ export default function AISettingsPage() {
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          onClick={() => handleDelete(config)}
+                          onClick={() => setToDelete(config)}
                         >
                           <Trash2 />
                         </Button>
@@ -412,12 +321,10 @@ export default function AISettingsPage() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {editingId === null
-                ? 'New AI Configuration'
-                : 'Edit AI Configuration'}
+              {editingId === null ? 'Add AI Model' : 'Edit AI Model'}
             </DialogTitle>
             <DialogDescription>
-              Configure the LLM endpoint used by the agents.
+              Configure the LLM endpoint used by agents.
             </DialogDescription>
           </DialogHeader>
 
@@ -428,7 +335,7 @@ export default function AISettingsPage() {
                 id="name"
                 value={configForm.name}
                 onChange={(e) => setConfig('name', e.target.value)}
-                placeholder="e.g. Local Qwen"
+                placeholder="e.g. OpenAI Main"
               />
             </div>
 
@@ -494,7 +401,7 @@ export default function AISettingsPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="max_tokens">Max Tokens</Label>
+                <Label htmlFor="max_tokens">Default Max Tokens</Label>
                 <Input
                   id="max_tokens"
                   type="number"
@@ -503,7 +410,7 @@ export default function AISettingsPage() {
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="temperature">Temperature</Label>
+                <Label htmlFor="temperature">Default Temperature</Label>
                 <Input
                   id="temperature"
                   type="number"
@@ -512,14 +419,6 @@ export default function AISettingsPage() {
                   onChange={(e) => setConfig('temperature', e.target.value)}
                 />
               </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={configForm.enabled}
-                onCheckedChange={(checked) => setConfig('enabled', checked)}
-              />
-              <Label htmlFor="enabled">Set as active</Label>
             </div>
           </div>
 
@@ -540,124 +439,18 @@ export default function AISettingsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={stagesOpen} onOpenChange={setStagesOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Prompts & Parameters</DialogTitle>
-            <DialogDescription>
-              System prompt, task prompt, and generation params per stage.
-              Empty fields fall back to defaults.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col gap-4">
-            <StageSection
-              title="Classification (分析)"
-              description="Classifies each email's category, topic, and priority."
-              form={classification}
-              onChange={(key, value) => setStage('classification', key, value)}
-              promptHint="Keep {email_content} in the prompt to inject the email."
-            />
-            <StageSection
-              title="Draft Reply (回覆)"
-              description="Drafts a professional reply from the classification."
-              form={draft}
-              onChange={(key, value) => setStage('draft', key, value)}
-            />
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStagesOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSaveStages} disabled={savingStages}>
-              {savingStages ? <Loader2 className="animate-spin" /> : null}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
-}
-
-function StageSection({
-  title,
-  description,
-  form,
-  onChange,
-  promptHint,
-}: {
-  title: string
-  description: string
-  form: StageForm
-  onChange: (key: keyof StageForm, value: string) => void
-  promptHint?: string
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border p-4">
-      <div className="flex flex-col gap-0.5">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="flex flex-col gap-1.5">
-          <Label>Role</Label>
-          <Input
-            value={form.role}
-            onChange={(e) => onChange('role', e.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label>Goal</Label>
-          <Input
-            value={form.goal}
-            onChange={(e) => onChange('goal', e.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label>Backstory</Label>
-          <Input
-            value={form.backstory}
-            onChange={(e) => onChange('backstory', e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label>Task Prompt</Label>
-        <Textarea
-          value={form.prompt}
-          onChange={(e) => onChange('prompt', e.target.value)}
-          rows={4}
-        />
-        {promptHint ? (
-          <p className="text-xs text-muted-foreground">{promptHint}</p>
-        ) : null}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:max-w-xs">
-        <div className="flex flex-col gap-1.5">
-          <Label>Max Tokens</Label>
-          <Input
-            type="number"
-            value={form.max_tokens}
-            onChange={(e) => onChange('max_tokens', e.target.value)}
-            placeholder="default"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label>Temperature</Label>
-          <Input
-            type="number"
-            step="0.1"
-            value={form.temperature}
-            onChange={(e) => onChange('temperature', e.target.value)}
-            placeholder="default"
-          />
-        </div>
-      </div>
+      <ConfirmDialog
+        open={toDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setToDelete(null)
+        }}
+        title={`Delete ${toDelete?.name ?? 'model'}?`}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (toDelete) handleDelete(toDelete)
+        }}
+      />
     </div>
   )
 }

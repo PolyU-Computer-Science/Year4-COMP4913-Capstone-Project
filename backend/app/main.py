@@ -8,7 +8,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.routers import cases, emails, settings, stats
+from backend.app.routers import (
+    cases,
+    connectors,
+    emails,
+    knowledge,
+    mailboxes,
+    observability,
+    settings,
+    stats,
+)
 
 load_dotenv(override=False)
 
@@ -40,6 +49,10 @@ def create_app() -> FastAPI:
     app.include_router(cases.router)
     app.include_router(stats.router)
     app.include_router(settings.router)
+    app.include_router(knowledge.router)
+    app.include_router(mailboxes.router)
+    app.include_router(connectors.router)
+    app.include_router(observability.router)
 
     @app.get("/api/health", tags=["health"])
     def health() -> dict:
@@ -58,6 +71,16 @@ def run() -> None:
     from email_assistant.core.settings_store import SettingsStore
 
     SettingsStore().ensure_default_ai_config()
+
+    # Backfill any legacy emails that predate mailbox scoping.
+    try:
+        from email_assistant.core.migrations import migrate_legacy_emails
+
+        migrated = migrate_legacy_emails()
+        if migrated:
+            print(f"Migrated {migrated} legacy email(s) to the Legacy mailbox.")
+    except Exception:  # noqa: BLE001 - migration must never block startup
+        print("WARNING: legacy email migration failed; skipping.")
 
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8000"))

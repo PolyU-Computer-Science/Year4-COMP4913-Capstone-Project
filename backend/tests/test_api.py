@@ -197,8 +197,8 @@ def test_process_all_continues_after_failure(
 
     emails = client.get("/api/emails").json()["emails"]
     statuses = {email["id"]: email["status"] for email in emails}
-    # The failed email reverted to 'new' so it can be retried.
-    assert sorted(statuses.values()) == ["new", "processed"]
+    # The failed email persists as 'failed' (retryable from the UI).
+    assert sorted(statuses.values()) == ["failed", "processed"]
 
 
 def test_cases_and_stats_reflect_processed_email(

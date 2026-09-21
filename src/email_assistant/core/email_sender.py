@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any
 
 _SUBJECT_LINE = re.compile(r"^\s*subject\s*:\s*(.*)$", re.IGNORECASE)
@@ -53,12 +54,13 @@ def send_reply(
     host = str(account.get("smtp_host") or "")
     port = int(account.get("smtp_port") or 587)
     password = str(account.get("password") or "")
+    name = str(account.get("name") or "")
 
     if not address or not host:
         raise ValueError("Mail account is missing address or SMTP host")
 
     msg = EmailMessage()
-    msg["From"] = address
+    msg["From"] = formataddr((name, address)) if name else address
     msg["To"] = to
     msg["Subject"] = subject if subject.startswith("Re:") else f"Re: {subject}"
     msg.set_content(strip_subject_body_labels(body))

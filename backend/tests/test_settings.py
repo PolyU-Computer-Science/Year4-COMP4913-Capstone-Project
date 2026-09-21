@@ -239,17 +239,18 @@ def test_mail_crud_roundtrip() -> None:
     created = client.post(
         "/api/settings/mail",
         json={
+            "name": "Support",
             "address": "support@example.com",
             "imap_host": "imap.gmail.com",
             "imap_port": 993,
             "password": "secret-pass",
-            "folder": "INBOX",
             "max_emails": 20,
             "enabled": True,
         },
     )
     assert created.status_code == 201
     body = created.json()
+    assert body["name"] == "Support"
     assert body["password"] == ""
     assert body["has_password"] is True
     account_id = body["id"]

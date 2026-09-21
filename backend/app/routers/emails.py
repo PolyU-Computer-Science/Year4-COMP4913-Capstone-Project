@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from backend.app.schemas import (
     CaseOut,
@@ -16,27 +17,39 @@ from backend.app.store import store
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
 
+class SyncIn(BaseModel):
+    """Optional payload for sync — target a single mailbox, or all."""
+
+    mailbox_id: int | None = None
+
+
 @router.get("", response_model=EmailsResponse)
-def list_emails() -> EmailsResponse:
-    """Return all stored emails (no side effects)."""
-    emails = store.list_emails()
+def list_emails(
+    mailbox_id: int | None = Query(default=None),
+) -> EmailsResponse:
+    """Return stored emails, optionally scoped to a single mailbox."""
+    emails = store.list_emails(mailbox_id)
     return EmailsResponse(emails=emails, count=len(emails))
 
 
 @router.post("/sync", response_model=SyncResponse)
-def sync_emails() -> SyncResponse:
+def sync_emails(payload: SyncIn | None = None) -> SyncResponse:
     """Fetch unread emails (IMAP) and persist them (deduped)."""
     from email_assistant.core import fetch_emails
 
+    mailbox_id = payload.mailbox_id if payload else None
     try:
-        raw_emails = fetch_emails()
+        if mailbox_id is None:
+            raw_emails = fetch_emails()
+        else:
+            raw_emails = fetch_emails(mailbox_id)
     except Exception as error:  # noqa: BLE001 - surface IMAP failures to the UI
         print(f"IMAP fetch failed: {error}")
         raise HTTPException(
             status_code=502, detail=f"IMAP fetch failed: {error}"
         ) from error
 
-    added, emails = store.sync_emails(raw_emails)
+    added, emails = store.sync_emails(raw_emails, mailbox_id)
     return SyncResponse(synced=added, emails=emails, count=len(emails))
 
 
@@ -58,13 +71,22 @@ def get_attachment(email_id: str, cid: str) -> Response:
 def process_email(email_id: str) -> ProcessResponse:
     """Run the AI crew (classify + draft) on a stored email by id.
 
-    This endpoint is synchronous so FastAPI executes it in a worker thread,
-    keeping the event loop free during the blocking CrewAI kickoff. The email
-    status transitions new -> processing -> processed (reverted to new on
-    failure so it can be retried).
+    The pipeline is mailbox-scoped: the mailbox's topics constrain the
+    classifier, and its indexed knowledge grounds the drafter (RAG). Each
+    stage is traced via the observer for latency/usage.
     """
+    import uuid
+
     from email_assistant.agents import EmailAssistant
     from email_assistant.core import format_email
+    from email_assistant.core.knowledge_retrieval import KnowledgeRetriever
+    from email_assistant.core.mailbox_context import load_mailbox_context
+    from email_assistant.core.observability import Observer
+    from email_assistant.core.rag import build_retrieval_query, format_knowledge_context
+    from email_assistant.core.topics import (
+        format_topics_prompt,
+        resolve_topic,
+    )
 
     email = store.get_email(email_id)
     if email is None:
@@ -81,8 +103,61 @@ def process_email(email_id: str) -> ProcessResponse:
         }
     )
 
+    # Load the mailbox's business context (topics, fields, knowledge, tools).
+    context = load_mailbox_context(email.mailbox_id) if email.mailbox_id else None
+    available_topics = (
+        format_topics_prompt(context.topics) if context else ""
+    )
+
+    trace_id = uuid.uuid4().hex
+    observer = Observer()
+
+    # 1. Knowledge retrieval (mailbox-scoped RAG). Best-effort: a retrieval
+    #    failure or zero results never blocks drafting.
+    knowledge_context = ""
+    knowledge_refs: list[dict] = []
+    if context and context.knowledge_sources and context.mailbox.get("use_knowledge"):
+        try:
+            with observer.run(
+                stage="knowledge_retrieval",
+                mailbox_id=email.mailbox_id,
+                email_id=email_id,
+                trace_id=trace_id,
+            ):
+                query = build_retrieval_query(
+                    subject=email.subject,
+                    body=email.body,
+                )
+                results = KnowledgeRetriever().search(
+                    email.mailbox_id, query, top_k=5
+                )
+                knowledge_context = format_knowledge_context(results)
+                knowledge_refs = [
+                    {
+                        "chunk_id": r.chunk_id,
+                        "source_id": r.source_id,
+                        "score": r.score,
+                    }
+                    for r in results
+                ]
+        except Exception:  # noqa: BLE001 - RAG must not block processing
+            knowledge_context = ""
+
+    # 2. Classifier + Drafter (single CrewAI sequential crew).
     try:
-        result = EmailAssistant().crew().kickoff(inputs={"email_content": content})
+        with observer.run(
+            stage="email_processing",
+            mailbox_id=email.mailbox_id,
+            email_id=email_id,
+            trace_id=trace_id,
+        ):
+            result = EmailAssistant().crew().kickoff(
+                inputs={
+                    "email_content": content,
+                    "available_topics": available_topics,
+                    "knowledge_context": knowledge_context or "(no knowledge available)",
+                }
+            )
     except Exception:
         store.mark_failed(email_id)
         raise
@@ -112,22 +187,47 @@ def process_email(email_id: str) -> ProcessResponse:
             ),
         )
 
+    # Resolve the free-form topic against the mailbox's configured topics.
+    topic_id, canonical = resolve_topic(
+        context.topics if context else [], classification.topic
+    )
+    classification.topic_id = topic_id
+    classification.topic_raw = classification.topic
+    if canonical:
+        classification.topic = canonical
+
     case = store.save_case(email_id, classification, result.raw)
     if case is None:
         store.mark_failed(email_id)
         raise HTTPException(status_code=404, detail="Email not found")
 
+    # Record retrieval provenance on the run for observability/debugging.
+    if knowledge_refs:
+        try:
+            runs = observer._store.list_runs(
+                mailbox_id=email.mailbox_id, email_id=email_id, limit=1
+            )
+            if runs:
+                observer._store.finish_run(
+                    runs[0]["id"],
+                    metadata={"knowledge_chunk_ids": [r["chunk_id"] for r in knowledge_refs]},
+                )
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
     return ProcessResponse(case=case)
 
 
 @router.post("/process-all", response_model=dict)
-def process_all_emails() -> dict:
+def process_all_emails(
+    mailbox_id: int | None = Query(default=None),
+) -> dict:
     """Queue-process all pending emails sequentially (one at a time).
 
     Synchronous so FastAPI runs it in a worker thread; each email's status
     transitions new -> processing -> processed (or back to new on failure).
     """
-    pending = store.list_pending_ids()
+    pending = store.list_pending_ids(mailbox_id)
     processed = 0
     failed: list[str] = []
 

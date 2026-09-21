@@ -22,16 +22,20 @@ class CaseStore:
     def __init__(self, db_path: str | None = None) -> None:
         self._db = Database(db_path)
 
-    def sync_emails(self, raw_emails: list[dict]) -> tuple[int, list[EmailItem]]:
+    def sync_emails(
+        self, raw_emails: list[dict], mailbox_id: int | None = None
+    ) -> tuple[int, list[EmailItem]]:
         """Upsert raw fetched emails. Returns (newly added, all stored emails)."""
         added = 0
         for email in raw_emails:
+            if mailbox_id is not None:
+                email["mailbox_id"] = mailbox_id
             if self._db.upsert_email(email):
                 added += 1
-        return added, self.list_emails()
+        return added, self.list_emails(mailbox_id)
 
-    def list_emails(self) -> list[EmailItem]:
-        return [EmailItem(**email) for email in self._db.list_emails()]
+    def list_emails(self, mailbox_id: int | None = None) -> list[EmailItem]:
+        return [EmailItem(**email) for email in self._db.list_emails(mailbox_id)]
 
     def get_email(self, email_id: str) -> EmailItem | None:
         email = self._db.get_email(email_id)
@@ -43,8 +47,8 @@ class CaseStore:
     def mark_failed(self, email_id: str) -> bool:
         return self._db.mark_failed(email_id)
 
-    def list_pending_ids(self) -> list[str]:
-        return self._db.list_pending_ids()
+    def list_pending_ids(self, mailbox_id: int | None = None) -> list[str]:
+        return self._db.list_pending_ids(mailbox_id)
 
     def get_attachment(
         self, email_id: str, cid: str
@@ -64,8 +68,8 @@ class CaseStore:
         )
         return CaseOut(**case) if case is not None else None
 
-    def get_cases(self) -> list[CaseOut]:
-        return [CaseOut(**case) for case in self._db.list_cases()]
+    def get_cases(self, mailbox_id: int | None = None) -> list[CaseOut]:
+        return [CaseOut(**case) for case in self._db.list_cases(mailbox_id)]
 
     def get_case(self, email_id: str) -> CaseOut | None:
         case = self._db.get_case(email_id)
@@ -79,13 +83,27 @@ class CaseStore:
         case = self._db.mark_sent(email_id)
         return CaseOut(**case) if case is not None else None
 
+    def get_case_field_values(self, case_id: str) -> dict[int, str]:
+        return self._db.get_case_field_values(case_id)
+
+    def set_case_field_values(self, case_id: str, values: dict[int, str]) -> None:
+        self._db.set_case_field_values(case_id, values)
+
     def clear(self) -> None:
         """Reset the store (used by tests)."""
         self._db.clear()
 
-    def stats(self) -> StatsOut:
-        emails = self._db.list_emails()
-        cases = self._db.list_cases()
+    def backfill_missing_mailbox_ids(self, mailbox_id: int) -> int:
+        """Assign legacy emails (NULL mailbox_id) to the given mailbox."""
+        return self._db.backfill_missing_mailbox_ids(mailbox_id)
+
+    def count_missing_mailbox_ids(self) -> int:
+        """Number of emails still without a mailbox_id."""
+        return self._db.count_missing_mailbox_ids()
+
+    def stats(self, mailbox_id: int | None = None) -> StatsOut:
+        emails = self._db.list_emails(mailbox_id)
+        cases = self._db.list_cases(mailbox_id)
 
         total = len(emails)
         processed = len(cases)

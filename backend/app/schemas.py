@@ -15,6 +15,7 @@ class EmailItem(BaseModel):
     timestamp: str
     html: str = ""
     status: str = "new"
+    mailbox_id: int | None = None
 
 
 class ProcessRequest(BaseModel):
@@ -32,6 +33,8 @@ class ClassificationOut(BaseModel):
     urgency_score: int
     summary: str
     custom: dict = Field(default_factory=dict)
+    topic_id: int | None = None
+    topic_raw: str = ""
 
 
 class CaseOut(BaseModel):
@@ -43,6 +46,9 @@ class CaseOut(BaseModel):
     draft: str
     created_at: str
     sent_at: str | None = None
+    mailbox_id: int | None = None
+    topic_id: int | None = None
+    topic_raw: str = ""
 
 
 class DraftIn(BaseModel):
@@ -149,6 +155,7 @@ class MailAccount(BaseModel):
     """A mail account as exposed to the frontend (password masked)."""
 
     id: int
+    name: str = ""
     address: str
     imap_host: str = ""
     imap_port: int = 993
@@ -156,7 +163,6 @@ class MailAccount(BaseModel):
     smtp_port: int = 587
     password: str = ""
     has_password: bool = False
-    folder: str = "INBOX"
     max_emails: int = 50
     enabled: bool = True
 
@@ -164,12 +170,281 @@ class MailAccount(BaseModel):
 class MailAccountIn(BaseModel):
     """Payload for creating or updating a mail account."""
 
+    name: str = ""
     address: str
     imap_host: str = ""
     imap_port: int = 993
     smtp_host: str = ""
     smtp_port: int = 587
     password: str = ""
-    folder: str = "INBOX"
     max_emails: int = 50
     enabled: bool = True
+
+
+# ---- mailboxes ----
+
+
+class MailboxIn(BaseModel):
+    """Payload for creating or updating a mailbox (business context)."""
+
+    name: str
+    address: str = ""
+    purpose: str = ""
+    status: str = "active"
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_security: str = "ssl"
+    imap_folder: str = "INBOX"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: str = "starttls"
+    password: str = ""
+    max_emails: int = 50
+    auto_process: bool = False
+    generate_drafts: bool = True
+    human_approval: bool = True
+    classifier_config_id: int | None = None
+    drafter_config_id: int | None = None
+    classifier_temperature: float | None = None
+    classifier_max_tokens: int | None = None
+    drafter_temperature: float | None = None
+    drafter_max_tokens: int | None = None
+    use_knowledge: bool = False
+    instructions: str = ""
+
+
+class MailboxOut(BaseModel):
+    """A mailbox as exposed to the frontend (password never returned)."""
+
+    id: int
+    name: str
+    address: str = ""
+    purpose: str = ""
+    status: str = "active"
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_security: str = "ssl"
+    imap_folder: str = "INBOX"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: str = "starttls"
+    has_password: bool = False
+    max_emails: int = 50
+    auto_process: bool = False
+    generate_drafts: bool = True
+    human_approval: bool = True
+    classifier_config_id: int | None = None
+    drafter_config_id: int | None = None
+    classifier_temperature: float | None = None
+    classifier_max_tokens: int | None = None
+    drafter_temperature: float | None = None
+    drafter_max_tokens: int | None = None
+    use_knowledge: bool = False
+    instructions: str = ""
+
+
+class TopicIn(BaseModel):
+    name: str
+    description: str = ""
+    examples: str = ""
+    status: str = "active"
+
+
+class TopicOut(BaseModel):
+    id: int
+    mailbox_id: int
+    name: str
+    description: str = ""
+    examples: str = ""
+    status: str = "active"
+
+
+class CustomFieldIn(BaseModel):
+    name: str
+    type: str = "text"
+    required: bool = False
+    options: str = ""
+    status: str = "active"
+
+
+class CustomFieldOut(BaseModel):
+    id: int
+    mailbox_id: int
+    name: str
+    type: str = "text"
+    required: bool = False
+    options: str = ""
+    status: str = "active"
+
+
+class KnowledgeSourceIn(BaseModel):
+    name: str
+    type: str = "document"
+    status: str = "ready"
+    chunks: int = 0
+    content: str = ""
+
+
+class KnowledgeSourceOut(BaseModel):
+    id: int
+    name: str
+    type: str = "document"
+    status: str = "ready"
+    chunks: int = 0
+    content: str = ""
+
+
+class ConnectorIn(BaseModel):
+    name: str
+    type: str = "mcp"
+    server: str = ""
+    status: str = "disconnected"
+
+
+class ConnectorOut(BaseModel):
+    id: int
+    name: str
+    type: str = "mcp"
+    server: str = ""
+    status: str = "disconnected"
+
+
+class MailboxConnectorOut(BaseModel):
+    id: int
+    name: str
+    type: str = "mcp"
+    server: str = ""
+    status: str = "disconnected"
+    enabled: bool = False
+    allowed_tools: str = ""
+
+
+class ConnectorAssignmentIn(BaseModel):
+    enabled: bool = True
+    allowed_tools: str = ""
+
+
+# ---- case fields ----
+
+
+class CaseFieldOut(BaseModel):
+    """A mailbox custom field merged with its value for a specific case."""
+
+    field_id: int
+    key: str
+    name: str
+    type: str = "text"
+    required: bool = False
+    options: list[str] = Field(default_factory=list)
+    value: object = None
+
+
+class CaseFieldsIn(BaseModel):
+    """Bulk update of case field values, keyed by field id."""
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---- knowledge indexing / retrieval ----
+
+
+class KnowledgeIndexResult(BaseModel):
+    status: str
+    document_id: int | None = None
+    chunks: int = 0
+    skipped: bool = False
+    error: str | None = None
+
+
+class KnowledgeDocumentOut(BaseModel):
+    id: int
+    mailbox_id: int
+    source_id: int
+    title: str = ""
+    status: str = "pending"
+    content_hash: str = ""
+    indexed_at: str | None = None
+
+
+class RetrievalRequest(BaseModel):
+    query: str
+    top_k: int = 8
+    source_ids: list[int] | None = None
+
+
+class RetrievalResultOut(BaseModel):
+    chunk_id: int
+    document_id: int
+    source_id: int
+    title: str
+    content: str
+    score: float
+    metadata: dict = Field(default_factory=dict)
+
+
+class RetrievalResponse(BaseModel):
+    query: str
+    results: list[RetrievalResultOut]
+
+
+# ---- connectors / MCP ----
+
+
+class ToolDescriptorOut(BaseModel):
+    connector_id: int
+    name: str
+    description: str = ""
+    risk_level: str = "read"
+    enabled: bool = False
+    permission_level: str = "read"
+
+
+class ToolPermissionIn(BaseModel):
+    tool_name: str
+    enabled: bool = False
+    permission_level: str = "read"
+
+
+class ConnectorPermissionsIn(BaseModel):
+    permissions: list[ToolPermissionIn]
+
+
+# ---- observability ----
+
+
+class ProcessingRunOut(BaseModel):
+    id: int
+    trace_id: str | None = None
+    mailbox_id: int | None = None
+    email_id: str | None = None
+    case_id: str | None = None
+    stage: str = "email_processing"
+    status: str = "running"
+    provider: str | None = None
+    model: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    latency_ms: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    metadata: dict = Field(default_factory=dict)
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class ToolAuditOut(BaseModel):
+    id: int
+    mailbox_id: int | None = None
+    email_id: str | None = None
+    case_id: str | None = None
+    connector_id: int | None = None
+    tool_name: str = ""
+    arguments_json_redacted: dict = Field(default_factory=dict)
+    status: str = ""
+    started_at: str | None = None
+    completed_at: str | None = None
+    latency_ms: float | None = None
+    result_summary: str = ""
+    error_type: str | None = None
+    error_message: str | None = None
