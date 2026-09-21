@@ -57,6 +57,7 @@ serves Support, Sales, HR, etc. without cross-context leakage.
 - **CrewAI Engine:** Staged LLM reasoning (Classifier → Drafter) with Pydantic-validated structured outputs.
 - **Knowledge / RAG:** Mailbox-scoped indexing, chunking, embeddings, and retrieval that grounds the drafter.
 - **MCP Runtime:** Connector tool discovery with default-deny permissions and audit logging.
+- **Routing Engine:** Deterministic case routing maps mailbox-scoped classifications and extracted fields to operational teams, then assigns work to eligible agents using configurable manual, round-robin, or balanced strategies.
 - **FastAPI Backend (`backend/app/`):** REST API for email sync, AI processing, case management, and runtime settings — all state persisted in SQLite.
 - **React Frontend (`frontend/`):** Human-in-the-Loop UI for reviewing, editing, approving, and sending AI-generated drafts.
 - **Observability:** Per-stage processing runs recording latency, token usage, and failures.
@@ -93,6 +94,10 @@ Existing LLM-based email assistants introduce several technical challenges:
 4. **Unnecessary use of LLM reasoning** — deterministic operations such as
    email retrieval do not require probabilistic AI reasoning.
 
+5. **Manual triage and unclear ownership** — classification alone does not
+   ensure that an incoming request reaches the appropriate operational team or
+   an available human agent.
+
 This project investigates a hybrid architecture that separates deterministic
 operations from LLM reasoning and introduces structured validation, knowledge
 grounding, and human approval.
@@ -125,6 +130,10 @@ latency, token usage, and cost across local and hosted LLMs?
 Can a Human-in-the-Loop architecture restrict potentially harmful agent
 actions while preserving useful AI automation?
 
+**RQ6 — Operational Routing**  
+Can AI-derived email classifications be reliably transformed into
+deterministic team and agent assignments under configurable routing policies?
+
 ### Measurable Objectives
 
 | ID | Objective | Evaluation |
@@ -135,6 +144,7 @@ actions while preserving useful AI automation?
 | O4 | Ground replies using organisational knowledge | Faithfulness, context precision and relevance |
 | O5 | Prevent AI-generated replies from being sent without human approval | Safety/integration tests |
 | O6 | Evaluate different LLM configurations | Quality, latency, token usage and cost |
+| O7 | Route classified cases to the appropriate team and available agent using configurable deterministic policies | Team-routing accuracy, assignment success rate, unassigned rate, workload distribution |
 
 ---
 
@@ -156,6 +166,9 @@ The main contributions of this project are:
 - **Retrieval-Augmented Generation** grounded in mailbox-scoped, indexed
   knowledge with provenance tracking and injection-safe prompts.
 - **MCP tool permissions** with default-deny enforcement and audit logging.
+- A deterministic **Team & Agent Routing Engine** that transforms AI-derived
+  topics, priorities, and structured fields into auditable work assignments
+  without delegating personnel decisions directly to the LLM.
 - A **Human-in-the-Loop approval workflow** that separates AI-generated drafts
   from external email actions.
 - **Runtime-selectable local and hosted LLM providers.**
@@ -185,6 +198,7 @@ flowchart TB
     subgraph Core["Core Engine (src/email_assistant)"]
         Fetcher["Email Fetcher<br/>(IMAP, per-mailbox)"]
         Crew["CrewAI Pipeline<br/>Classifier --> Drafter"]
+        Routing["Routing Engine<br/>(rules → team → agent)"]
         RAG["Knowledge Retrieval<br/>(mailbox-scoped)"]
         MCP["MCP Runtime<br/>(permissions + audit)"]
         Sender["Email Sender<br/>(SMTP)"]
@@ -200,6 +214,7 @@ flowchart TB
     UI -->|HTTP /api| Routers
     Routers --> Fetcher
     Routers --> Crew
+    Routers --> Routing
     Routers --> RAG
     Routers --> MCP
     Routers --> Sender
@@ -220,7 +235,10 @@ flowchart TB
 2. **Process** — the staged pipeline runs mailbox-scoped: the Classifier uses
    the mailbox's topics; knowledge is retrieved from the mailbox's own index;
    the Drafter grounds its reply in that context.
-3. **Review & Send** — the human edits/approves the draft in the UI, then the
+3. **Route** — the deterministic routing engine maps the case's classification
+   and fields to a team (first-match routing rules), then the team's assignment
+   strategy selects an eligible agent.
+4. **Review & Send** — the human edits/approves the draft in the UI, then the
    backend sends it via SMTP using the enabled mail account.
 
 ---
@@ -276,12 +294,19 @@ Mailbox
   ├── Custom Fields → typed, validated, partial-success extraction
   ├── Knowledge     → mailbox-scoped indexing + retrieval (RAG)
   ├── Connectors    → default-deny tool permissions + audit
-  └── AI Behaviour  → per-stage model / temperature / instructions
+  ├── AI Behaviour  → per-stage model / temperature / instructions
+  └── Routing Rules → map classified work to teams
+                        ↓
+                      Teams
+                        ↓
+                      Agents
 ```
 
 This means a Support mailbox sees only Support topics, retrieves only Support
 knowledge, and can only invoke tools permitted to Support — verified by
-cross-mailbox isolation tests.
+cross-mailbox isolation tests. Topics describe *what* an email is; teams
+describe *who* is responsible; routing rules map the former to the latter
+(rather than coupling topics directly to teams).
 
 ---
 
@@ -384,6 +409,9 @@ Incoming emails, retrieved knowledge documents, and tool results are treated as
 | Credential disclosure | Secrets encrypted at rest, masked in API responses, redacted in audit |
 | Runaway model execution | Token limits and request timeouts |
 | External-model privacy | Provider is configurable; local models are supported |
+| Incorrect AI-driven personnel assignment | LLM only supplies validated classification; deterministic routing rules select teams and agents |
+| Assignment outside team membership | Backend membership validation before assignment |
+| Agent overload | Capacity-aware assignment / unassigned team queue |
 
 The system follows a **least-authority** design: AI components may propose
 actions, while external side effects remain under deterministic application and
@@ -401,6 +429,8 @@ human control.
 | RAG Retrieval | Different retrieval settings | Context Precision / Recall |
 | RAG Generation | No-RAG vs RAG | Faithfulness, Answer Relevancy |
 | Model Comparison | Local vs hosted LLM | Quality, latency, tokens, estimated cost |
+| Case Routing | Topic/priority rules + assignment strategies | Routing accuracy, assignment success, unassigned rate |
+| Workload Assignment | Round Robin vs Balanced | Distribution variance, max workload, unassigned rate |
 | Safety | Adversarial / prompt-injection test cases | Unsafe-action rate, approval-bypass rate |
 
 RAG is introduced as an **experimental grounding mechanism** rather than merely
@@ -496,6 +526,7 @@ and will be replaced with a faithfulness rubric for the final report.
 | Real MCP transport | ✅ Implemented | Live-verified against MTR MCP |
 | Observability (runs / latency / tokens) | ✅ Implemented | Unit tested |
 | Real semantic embedding provider | ✅ Implemented | OpenRouter `qwen/qwen3-embedding-8b` |
+| Teams / Agents / Routing | 📋 Planned | Sprint 9 (not yet implemented) |
 | Long-term memory | 📋 Planned | Not evaluated |
 
 ---
@@ -576,6 +607,8 @@ email_assistant/
 │   │       ├── mailboxes.py        # Mailboxes / topics / fields / knowledge / connectors
 │   │       ├── knowledge.py        # Knowledge indexing + retrieval endpoints
 │   │       ├── connectors.py       # MCP discovery / permissions / audit
+│   │       ├── teams.py            # Teams / agents / membership (planned)
+│   │       ├── routing.py          # Routing rules (planned)
 │   │       ├── observability.py    # Processing runs + stats
 │   │       ├── stats.py            # Dashboard statistics
 │   │       └── settings.py         # AI configs / stage settings / mail accounts CRUD
@@ -591,7 +624,9 @@ email_assistant/
 │           ├── dashboard.tsx       # Stats + category chart + recent activity
 │           ├── inbox.tsx           # Email list (master-detail), sync, AI process
 │           ├── cases.tsx           # Cases table + case detail (draft / fields)
-│           ├── mailboxes/          # Mailbox list, add, detail tabs
+│           ├── mailboxes/          # Mailbox list, add, detail tabs (routing planned)
+│           ├── teams/              # Teams + members (planned)
+│           ├── agents/             # Agents (planned)
 │           └── settings/           # ai-models.tsx, general.tsx
 ├── tests/                          # Core unit tests (fetcher, database, parser, …)
 └── src/
@@ -609,6 +644,10 @@ email_assistant/
         │   ├── mailbox_context.py  # MailboxRuntimeContext service
         │   ├── topics.py           # Topic resolution + validation
         │   ├── field_validation.py # Custom field value validation
+        │   ├── routing.py          # Deterministic routing rules → team (planned)
+        │   ├── assignment.py       # Team assignment strategies (planned)
+        │   ├── teams.py            # Teams / membership (planned)
+        │   ├── users.py            # Agents / users (planned)
         │   ├── extraction.py       # AI extraction client abstraction
         │   ├── extraction_service.py # Topic + field extraction (partial success)
         │   ├── chunking.py         # Knowledge chunking
@@ -679,6 +718,12 @@ email_assistant/
 - [x] Real MCP transport (Streamable HTTP) — live-verified against MTR MCP
 - [x] MiMo structured runtime contract (`xiaomi/mimo-v2.5-pro`)
 - [x] Evaluation dataset v1 (950 records) + harness (metrics, runners)
+- [ ] Teams / Agents / Membership (DB + CRUD)
+- [ ] Case team ownership + assignee + assignment history
+- [ ] Mailbox routing rules (first-match, configurable)
+- [ ] Assignment engine (manual / round-robin / balanced)
+- [ ] Teams / Agents / Routing UI
+- [ ] Routing evaluation dataset + metrics
 - [ ] Full test-split evaluation run (preliminary sample complete)
 - [ ] CrewAI long-term memory via SQLite (`memory=True`)
 - [ ] Final FYP Report
@@ -694,3 +739,6 @@ email_assistant/
 5. [AI Risk Management Framework: Generative AI Profile — NIST](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence)
 6. [Context Precision — Ragas](https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/context_precision/)
 7. [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks — Lewis et al., 2020](https://arxiv.org/abs/2005.11401)
+8. [Organize team inboxes — Intercom](https://www.intercom.com/help/en/articles/197-organize-team-inboxes)
+9. [About omnichannel routing — Zendesk](https://support.zendesk.com/hc/en-us/articles/4409149119514-About-omnichannel-routing)
+10. [Organize Agents into Groups — Freshdesk](https://support.freshdesk.com/support/solutions/articles/37604-organize-agents-into-groups)
