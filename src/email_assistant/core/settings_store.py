@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -263,6 +264,25 @@ class SettingsStore:
                 created_at TEXT,
                 updated_at TEXT,
                 UNIQUE(mailbox_id, connector_id, tool_name)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS connector_tools (
+                id INTEGER PRIMARY KEY,
+                connector_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                input_schema_json TEXT DEFAULT '{}',
+                output_schema_json TEXT DEFAULT '{}',
+                annotations_json TEXT DEFAULT '{}',
+                enabled INTEGER DEFAULT 0,
+                risk_level TEXT DEFAULT 'read',
+                discovered_at TEXT,
+                updated_at TEXT,
+                UNIQUE(connector_id, name)
             )
             """
         )
@@ -1516,3 +1536,65 @@ class SettingsStore:
                 conn.commit()
             finally:
                 conn.close()
+
+    # ---- discovered connector tools ----
+
+    def replace_connector_tools(
+        self, connector_id: int, tools: list[dict[str, Any]]
+    ) -> None:
+        """Persist discovered tools for a connector (replace previous set)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "DELETE FROM connector_tools WHERE connector_id = ?",
+                    (connector_id,),
+                )
+                for tool in tools:
+                    conn.execute(
+                        """
+                        INSERT INTO connector_tools
+                            (connector_id, name, title, description,
+                             input_schema_json, output_schema_json,
+                             annotations_json, enabled, risk_level,
+                             discovered_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            connector_id,
+                            str(tool.get("name", "")),
+                            str(tool.get("title", "")),
+                            str(tool.get("description", "")),
+                            json.dumps(tool.get("input_schema") or {}),
+                            json.dumps(tool.get("output_schema") or {}),
+                            json.dumps(tool.get("annotations") or {}),
+                            0,
+                            str(tool.get("risk_level", "read")),
+                            now,
+                            now,
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def list_connector_tools(self, connector_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM connector_tools WHERE connector_id = ? ORDER BY id",
+                    (connector_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        tools = []
+        for row in rows:
+            tool = dict(row)
+            tool["input_schema"] = json.loads(tool.get("input_schema_json") or "{}")
+            tool["output_schema"] = json.loads(tool.get("output_schema_json") or "{}")
+            tool["annotations"] = json.loads(tool.get("annotations_json") or "{}")
+            tool["enabled"] = bool(tool.get("enabled"))
+            tools.append(tool)
+        return tools

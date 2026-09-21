@@ -5,14 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from email_assistant.core.mcp_runtime import MCPClientManager
+from email_assistant.core.mcp_transport import StreamableHttpTransport
 from email_assistant.core.observability_store import ObservabilityStore
 from email_assistant.core.settings_store import SettingsStore
+from email_assistant.core.tool_executor import ToolExecutionGateway
 from email_assistant.core.tool_permissions import default_risk_level
 
 from backend.app.schemas import (
     ConnectorPermissionsIn,
     ToolAuditOut,
     ToolDescriptorOut,
+    ToolExecutionIn,
+    ToolExecutionOut,
 )
 
 router = APIRouter(prefix="/api/mailboxes", tags=["connectors"])
@@ -39,13 +43,39 @@ def _require_mailbox_connector(mailbox_id: int, connector_id: int) -> dict:
     response_model=list[ToolDescriptorOut],
 )
 def discover_tools(mailbox_id: int, connector_id: int) -> list[ToolDescriptorOut]:
+    """Discover tools from the live connector and persist them.
+
+    Uses the real Streamable HTTP transport (connector.server). Tool names and
+    schemas are never hardcoded.
+    """
     _require_mailbox(mailbox_id)
     connector = _require_mailbox_connector(mailbox_id, connector_id)
 
-    manager = MCPClientManager()
-    tools = manager.discover_tools(connector)
-    permissions = SettingsStore().list_tool_permissions(mailbox_id, connector_id)
+    manager = MCPClientManager(transport=StreamableHttpTransport())
+    try:
+        tools = manager.discover_tools(connector)
+    except Exception as error:  # noqa: BLE001 - surface connection errors
+        raise HTTPException(
+            status_code=502, detail=f"MCP discovery failed: {error}"
+        ) from error
 
+    store = SettingsStore()
+    # Persist discovered tools (risk level from heuristics).
+    store.replace_connector_tools(
+        connector_id,
+        [
+            {
+                "name": tool.name,
+                "title": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "risk_level": tool.risk_level or default_risk_level(tool.name),
+            }
+            for tool in tools
+        ],
+    )
+
+    permissions = store.list_tool_permissions(mailbox_id, connector_id)
     result = []
     for tool in tools:
         permission = permissions.get(tool.name)
@@ -69,6 +99,29 @@ def discover_tools(mailbox_id: int, connector_id: int) -> list[ToolDescriptorOut
     response_model=list[ToolDescriptorOut],
 )
 def list_tools(mailbox_id: int, connector_id: int) -> list[ToolDescriptorOut]:
+    """List persisted tools (or re-discover if none persisted)."""
+    _require_mailbox(mailbox_id)
+    _require_mailbox_connector(mailbox_id, connector_id)
+
+    persisted = SettingsStore().list_connector_tools(connector_id)
+    if persisted:
+        permissions = SettingsStore().list_tool_permissions(mailbox_id, connector_id)
+        result = []
+        for tool in persisted:
+            permission = permissions.get(tool["name"])
+            result.append(
+                ToolDescriptorOut(
+                    connector_id=connector_id,
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    risk_level=tool.get("risk_level", "read"),
+                    enabled=bool(permission["enabled"]) if permission else False,
+                    permission_level=(
+                        permission["permission_level"] if permission else "read"
+                    ),
+                )
+            )
+        return result
     return discover_tools(mailbox_id, connector_id)
 
 
@@ -91,6 +144,41 @@ def update_permissions(
     }
     SettingsStore().set_tool_permissions(mailbox_id, connector_id, permissions)
     return {"ok": True}
+
+
+@router.post(
+    "/{mailbox_id}/connectors/{connector_id}/execute",
+    response_model=ToolExecutionOut,
+)
+def execute_tool(
+    mailbox_id: int, connector_id: int, payload: ToolExecutionIn
+) -> ToolExecutionOut:
+    """Execute a tool call through the permission gateway (server-side authority)."""
+    _require_mailbox(mailbox_id)
+    _require_mailbox_connector(mailbox_id, connector_id)
+
+    gateway = ToolExecutionGateway(
+        manager=MCPClientManager(transport=StreamableHttpTransport())
+    )
+    result = gateway.execute(
+        mailbox_id=mailbox_id,
+        connector_id=connector_id,
+        tool_name=payload.tool_name,
+        arguments=payload.arguments,
+        email_id=payload.email_id,
+        case_id=payload.case_id,
+        approved=payload.approved,
+    )
+
+    if result.denied:
+        raise HTTPException(status_code=403, detail=result.error or "Tool denied")
+    if result.requires_approval:
+        return ToolExecutionOut(
+            ok=False, requires_approval=True, result=None, error=None
+        )
+    if not result.ok:
+        raise HTTPException(status_code=502, detail=result.error or "Tool execution failed")
+    return ToolExecutionOut(ok=True, result=result.result)
 
 
 @router.get("/{mailbox_id}/tool-audit", response_model=list[ToolAuditOut])

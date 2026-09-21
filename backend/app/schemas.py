@@ -430,6 +430,21 @@ class ConnectorPermissionsIn(BaseModel):
     permissions: list[ToolPermissionIn]
 
 
+class ToolExecutionIn(BaseModel):
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+    email_id: str | None = None
+    case_id: str | None = None
+    approved: bool = False
+
+
+class ToolExecutionOut(BaseModel):
+    ok: bool
+    requires_approval: bool = False
+    result: object = None
+    error: str | None = None
+
+
 # ---- observability ----
 
 

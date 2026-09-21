@@ -76,7 +76,31 @@ class _FakeTransport:
         return {"ok": True}
 
 
-def test_mcp_discovery_and_permissions_roundtrip() -> None:
+def test_mcp_discovery_and_permissions_roundtrip(monkeypatch) -> None:
+    # Mock the real transport so discovery returns deterministic tools.
+    from email_assistant.core.mcp_transport import StreamableHttpTransport
+
+    class _FakeTransport:
+        def list_tools(self, server):
+            return [
+                {
+                    "name": "crm.get_customer",
+                    "title": "crm.get_customer",
+                    "description": "get customer",
+                    "input_schema": {},
+                    "output_schema": {},
+                    "annotations": {},
+                }
+            ]
+
+        def call_tool(self, server, tool_name, arguments):
+            return {"content": []}
+
+    monkeypatch.setattr(
+        "backend.app.routers.connectors.StreamableHttpTransport",
+        lambda: _FakeTransport(),
+    )
+
     mailbox_id = client.post(
         "/api/mailboxes", json={"name": "Support", "address": "s@x.com"}
     ).json()["id"]
@@ -89,11 +113,13 @@ def test_mcp_discovery_and_permissions_roundtrip() -> None:
         json={"enabled": True, "allowed_tools": ""},
     )
 
-    # Discover tools (default NoopTransport -> no tools), then set permissions.
+    # Discover tools via the mocked transport.
     discovered = client.post(
         f"/api/mailboxes/{mailbox_id}/connectors/{connector_id}/discover"
     ).json()
-    assert discovered == []
+    assert len(discovered) == 1
+    assert discovered[0]["name"] == "crm.get_customer"
+    assert discovered[0]["enabled"] is False  # default deny
 
     # Set a permission explicitly.
     client.put(
