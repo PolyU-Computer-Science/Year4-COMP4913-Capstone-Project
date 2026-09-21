@@ -83,3 +83,21 @@ class Observer:
                     )
                 except Exception:  # noqa: BLE001
                     logger.warning("Observer finish failed", exc_info=True)
+
+    def record_usage(self, run_id: int | None, **tokens: Any) -> None:
+        """Attach token usage to a finished run (best effort)."""
+        if run_id is None:
+            return
+        try:
+            self._store.record_usage(run_id, **tokens)
+        except Exception:  # noqa: BLE001
+            logger.warning("Observer record_usage failed", exc_info=True)
+
+    def attach_metadata(self, run_id: int | None, metadata: dict[str, Any]) -> None:
+        """Replace a finished run's metadata (best effort)."""
+        if run_id is None:
+            return
+        try:
+            self._store.attach_metadata(run_id, metadata)
+        except Exception:  # noqa: BLE001
+            logger.warning("Observer attach_metadata failed", exc_info=True)

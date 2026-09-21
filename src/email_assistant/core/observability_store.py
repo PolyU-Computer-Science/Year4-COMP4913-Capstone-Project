@@ -170,6 +170,40 @@ class ObservabilityStore:
             finally:
                 conn.close()
 
+    def record_usage(
+        self,
+        run_id: int,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+    ) -> None:
+        """Update only the token columns of a finished run."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "UPDATE processing_runs SET input_tokens = ?, "
+                    "output_tokens = ?, total_tokens = ? WHERE id = ?",
+                    (input_tokens, output_tokens, total_tokens, run_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def attach_metadata(self, run_id: int, metadata: dict[str, Any]) -> None:
+        """Replace the metadata of a finished run (used for stage stats)."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "UPDATE processing_runs SET metadata_json = ? WHERE id = ?",
+                    (json.dumps(metadata or {}), run_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     def list_runs(
         self,
         mailbox_id: int | None = None,

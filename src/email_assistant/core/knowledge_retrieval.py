@@ -31,6 +31,15 @@ class RetrievalResult:
     metadata: dict[str, Any]
 
 
+@dataclass
+class RetrievalStats:
+    """Counters for observability: how many chunks were considered/skipped."""
+
+    chunks_considered: int = 0
+    stale_chunks_skipped: int = 0
+    returned_count: int = 0
+
+
 class KnowledgeRetriever:
     """Retrieves top-k mailbox-scoped chunks for a query."""
 
@@ -50,18 +59,34 @@ class KnowledgeRetriever:
         source_ids: list[int] | None = None,
         min_score: float | None = None,
     ) -> list[RetrievalResult]:
-        """Search mailbox chunks by cosine similarity.
+        """Search mailbox chunks by cosine similarity (see ``search_detailed``)."""
+        results, _ = self.search_detailed(
+            mailbox_id, query, top_k, source_ids, min_score
+        )
+        return results
+
+    def search_detailed(
+        self,
+        mailbox_id: int,
+        query: str,
+        top_k: int = 8,
+        source_ids: list[int] | None = None,
+        min_score: float | None = None,
+    ) -> tuple[list[RetrievalResult], RetrievalStats]:
+        """Search mailbox chunks, returning (results, stats).
 
         Only chunks belonging to ``mailbox_id`` and whose document is indexed
         are considered. Chunks from other mailboxes are never returned. Chunks
         whose embedding identity (provider/model/dim) does not match the
-        current client are skipped — they must be re-indexed first.
+        current client are skipped (counted in ``stale_chunks_skipped``).
         """
+        stats = RetrievalStats()
         if not query.strip():
-            return []
+            return [], stats
 
         query_vector = self._embedding.embed_query(query)
         chunks = self._store.list_chunks(mailbox_id, source_ids)
+        stats.chunks_considered = len(chunks)
 
         results: list[RetrievalResult] = []
         for chunk in chunks:
@@ -77,6 +102,7 @@ class KnowledgeRetriever:
             )
             if not embeddings_compatible(indexed_config, self._embedding.config):
                 # Stale index under a different embedding model — skip.
+                stats.stale_chunks_skipped += 1
                 continue
             score = cosine_similarity(query_vector, embedding)
             if min_score is not None and score < min_score:
@@ -94,4 +120,6 @@ class KnowledgeRetriever:
             )
 
         results.sort(key=lambda r: r.score, reverse=True)
-        return results[:top_k]
+        results = results[:top_k]
+        stats.returned_count = len(results)
+        return results, stats

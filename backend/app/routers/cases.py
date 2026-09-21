@@ -54,13 +54,22 @@ def send_case(case_id: str) -> CaseOut:
             status_code=400, detail="No enabled mail account configured"
         )
 
+    from email_assistant.core.observability import Observer
+
+    observer = Observer()
     try:
-        send_reply(
-            account,
-            to=case.email.sender,
-            subject=case.email.subject,
-            body=case.draft,
-        )
+        with observer.run(
+            stage="send",
+            mailbox_id=case.mailbox_id,
+            email_id=case.id,
+            case_id=case.id,
+        ):
+            send_reply(
+                account,
+                to=case.email.sender,
+                subject=case.email.subject,
+                body=case.draft,
+            )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001 - report SMTP failures to the UI

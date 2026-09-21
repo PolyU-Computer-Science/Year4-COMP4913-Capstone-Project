@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
+from email_assistant.core.observability import Observer
+
 from backend.app.schemas import (
     CaseOut,
     ClassificationOut,
@@ -38,11 +40,16 @@ def sync_emails(payload: SyncIn | None = None) -> SyncResponse:
     from email_assistant.core import fetch_emails
 
     mailbox_id = payload.mailbox_id if payload else None
+    observer = Observer()
     try:
-        if mailbox_id is None:
-            raw_emails = fetch_emails()
-        else:
-            raw_emails = fetch_emails(mailbox_id)
+        with observer.run(
+            stage="email_fetch",
+            mailbox_id=mailbox_id,
+        ):
+            if mailbox_id is None:
+                raw_emails = fetch_emails()
+            else:
+                raw_emails = fetch_emails(mailbox_id)
     except Exception as error:  # noqa: BLE001 - surface IMAP failures to the UI
         print(f"IMAP fetch failed: {error}")
         raise HTTPException(
@@ -81,7 +88,6 @@ def process_email(email_id: str) -> ProcessResponse:
     from email_assistant.core import format_email
     from email_assistant.core.knowledge_retrieval import KnowledgeRetriever
     from email_assistant.core.mailbox_context import load_mailbox_context
-    from email_assistant.core.observability import Observer
     from email_assistant.core.rag import build_retrieval_query, format_knowledge_context
     from email_assistant.core.topics import (
         format_topics_prompt,
@@ -116,6 +122,7 @@ def process_email(email_id: str) -> ProcessResponse:
     #    failure or zero results never blocks drafting.
     knowledge_context = ""
     knowledge_refs: list[dict] = []
+    retrieval_stats: dict = {}
     if context and context.knowledge_sources and context.mailbox.get("use_knowledge"):
         try:
             with observer.run(
@@ -123,12 +130,13 @@ def process_email(email_id: str) -> ProcessResponse:
                 mailbox_id=email.mailbox_id,
                 email_id=email_id,
                 trace_id=trace_id,
-            ):
+            ) as retrieval_run_id:
                 query = build_retrieval_query(
                     subject=email.subject,
                     body=email.body,
                 )
-                results = KnowledgeRetriever().search(
+                retriever = KnowledgeRetriever()
+                results, stats = retriever.search_detailed(
                     email.mailbox_id, query, top_k=5
                 )
                 knowledge_context = format_knowledge_context(results)
@@ -140,6 +148,17 @@ def process_email(email_id: str) -> ProcessResponse:
                     }
                     for r in results
                 ]
+                retrieval_stats = {
+                    "query": query[:200],
+                    "top_k": 5,
+                    "chunks_considered": stats.chunks_considered,
+                    "stale_chunks_skipped": stats.stale_chunks_skipped,
+                    "returned_count": stats.returned_count,
+                    "embedding_provider": retriever._embedding.provider,
+                    "embedding_model": retriever._embedding.model,
+                    "embedding_dim": retriever._embedding.dim,
+                }
+            observer.attach_metadata(retrieval_run_id, retrieval_stats)
         except Exception:  # noqa: BLE001 - RAG must not block processing
             knowledge_context = ""
 
@@ -150,7 +169,7 @@ def process_email(email_id: str) -> ProcessResponse:
             mailbox_id=email.mailbox_id,
             email_id=email_id,
             trace_id=trace_id,
-        ):
+        ) as processing_run_id:
             result = EmailAssistant().crew().kickoff(
                 inputs={
                     "email_content": content,
@@ -158,6 +177,7 @@ def process_email(email_id: str) -> ProcessResponse:
                     "knowledge_context": knowledge_context or "(no knowledge available)",
                 }
             )
+        _record_usage(observer, processing_run_id, result)
     except Exception:
         store.mark_failed(email_id)
         raise
@@ -219,31 +239,47 @@ def process_email(email_id: str) -> ProcessResponse:
                 mailbox_id=email.mailbox_id,
                 email_id=email_id,
                 trace_id=trace_id,
-            ):
+            ) as extraction_run_id:
                 outcome = extraction_service.extract(
                     content, context.topics, context.active_fields
                 )
+            observer.attach_metadata(
+                extraction_run_id,
+                {
+                    "topic_resolved": outcome.topic_resolved,
+                    "fields_proposed": outcome.fields_proposed,
+                    "fields_accepted": outcome.fields_accepted,
+                    "fields_rejected": outcome.fields_rejected,
+                },
+            )
             values = outcome_to_values_json(outcome)
             if values:
                 store.fill_ai_case_field_values(email_id, values)
         except Exception:  # noqa: BLE001 - extraction failure must not block
             pass
 
-    # Record retrieval provenance on the run for observability/debugging.
-    if knowledge_refs:
-        try:
-            runs = observer._store.list_runs(
-                mailbox_id=email.mailbox_id, email_id=email_id, limit=1
-            )
-            if runs:
-                observer._store.finish_run(
-                    runs[0]["id"],
-                    metadata={"knowledge_chunk_ids": [r["chunk_id"] for r in knowledge_refs]},
-                )
-        except Exception:  # noqa: BLE001 - best effort
-            pass
-
     return ProcessResponse(case=case)
+
+
+def _record_usage(observer: Observer, run_id: int | None, result) -> None:
+    """Record token/model usage from a CrewAI result if available (best effort)."""
+    if run_id is None:
+        return
+    try:
+        usage = getattr(result, "usage_metrics", None) or getattr(
+            result, "token_usage", None
+        )
+        if not usage:
+            return
+        observer.record_usage(
+            run_id,
+            input_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+            output_tokens=usage.get("completion_tokens")
+            or usage.get("output_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
+    except Exception:  # noqa: BLE001 - best effort
+        pass
 
 
 @router.post("/process-all", response_model=dict)
