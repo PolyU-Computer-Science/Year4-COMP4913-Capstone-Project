@@ -118,10 +118,30 @@ def embeddings_compatible(indexed: EmbeddingConfig, current: EmbeddingConfig) ->
 def get_embedding_client(provider: str = "hashing") -> EmbeddingClient:
     """Return an embedding client for the given provider string.
 
-    Only ``hashing`` is implemented out of the box; other providers fall back
-    to it so the pipeline never crashes on configuration.
+    ``hashing`` (and ``local``/empty) resolve to the deterministic offline
+    client. ``openrouter`` resolves to the semantic OpenRouter client using
+    env config; a missing API key falls back to hashing so the pipeline never
+    crashes on configuration.
     """
+    if provider == "openrouter":
+        try:
+            from email_assistant.core.openrouter_embeddings import (
+                build_openrouter_embedding_client,
+            )
+
+            return build_openrouter_embedding_client()
+        except Exception:  # noqa: BLE001 - fall back to offline client
+            return HashingEmbeddingClient()
+
     if provider in ("hashing", "local", ""):
         return HashingEmbeddingClient()
     # Unknown provider: fall back to deterministic local embeddings.
     return HashingEmbeddingClient()
+
+
+def get_default_embedding_client() -> EmbeddingClient:
+    """Resolve the embedding client from the ``EMBEDDING_PROVIDER`` env var."""
+    import os
+
+    provider = os.environ.get("EMBEDDING_PROVIDER", "hashing").strip().lower()
+    return get_embedding_client(provider)
