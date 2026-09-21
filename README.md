@@ -348,7 +348,8 @@ Each incoming email is treated as a **ticket**:
 | **priority** | How urgent it is | `low` / `normal` / `high` / `urgent` | AI suggests, human can override |
 | **category** | What *kind* of request it is (stable, small set) | `question` / `incident` / `problem` / `task` / `spam` | AI (classifier) |
 | **topic** | What the email is *about* (open-ended subject matter) | `refund`, `bug_report`, `password_reset`, `lead`, … | AI (classifier) |
-| **urgency_score / summary / requires_reply** | Auxiliary classification signals | 1–10 / text / bool | AI (classifier) |
+| **urgency_score / summary** | Auxiliary classification signals | 1–10 / text | AI (classifier) |
+| **topic_id / topic_raw** | Resolved topic (id + raw model output) | integer / text | Resolver |
 
 ### Classification Categories
 
@@ -356,7 +357,7 @@ The **category** field is kept small and stable:
 
 | Category | Description | Auto-Reply Strategy |
 | --- | --- | --- |
-| **question** | A question or request for information | Draft reply using knowledge base (planned: RAG FAQ) |
+| **question** | A question or request for information | Draft reply grounded in mailbox knowledge (RAG) |
 | **incident** | A single occurrence of a problem | Flag for human review, draft holding response |
 | **problem** | A larger issue affecting many | Flag for human review |
 | **task** | Assignable action item | Draft acceptance/tentative response |
@@ -487,14 +488,14 @@ and will be replaced with a faithfulness rubric for the final report.
 | Custom fields (typed + validated) | ✅ Implemented | Unit tested |
 | AI field extraction (partial success) | ✅ Implemented | Unit tested |
 | Knowledge indexing / chunking | ✅ Implemented | Unit tested |
-| Knowledge retrieval (mailbox-scoped) | ✅ Implemented | 🔄 Benchmark pending |
+| Knowledge retrieval (mailbox-scoped) | ✅ Implemented | ✅ Preliminary benchmark (Recall@1/3/5 = 1.00) |
 | RAG → Drafter | ✅ Implemented | 🔄 Evaluation pending |
 | Human approval | ✅ Implemented | 🔄 Safety testing pending |
 | SMTP delivery | ✅ Implemented | Integration tested |
 | MCP permissions / audit | ✅ Implemented | Unit tested |
-| Real MCP transport | 📋 Planned | Not implemented |
+| Real MCP transport | ✅ Implemented | Live-verified against MTR MCP |
 | Observability (runs / latency / tokens) | ✅ Implemented | Unit tested |
-| Real semantic embedding provider | 📋 Planned | Hashing provider used for tests |
+| Real semantic embedding provider | ✅ Implemented | OpenRouter `qwen/qwen3-embedding-8b` |
 | Long-term memory | 📋 Planned | Not evaluated |
 
 ---
@@ -543,7 +544,7 @@ Open `http://localhost:5173`.
 ### Run Tests
 
 ```bash
-uv run pytest            # 194 tests (core + backend API), no real API calls required
+uv run pytest            # 280 tests (core + backend API), no real API calls required
 ```
 
 For the full configuration reference, API reference, and development workflow,
@@ -637,9 +638,13 @@ email_assistant/
 - The five-category classification taxonomy may not generalise to all
   organisations.
 - Draft quality depends on the selected LLM and prompt configuration.
-- Knowledge retrieval uses a deterministic hashing embedding client; a real
-  semantic embedding provider is not yet integrated.
-- Real MCP transport is not yet connected (permission/audit layer is ready).
+- Out-of-box MiMo category output is not constrained to the enum; the
+  classification pipeline relies on structured-output validation + fallback
+  parsing to compensate (see Preliminary Results).
+- The `hashing` embedding client is retained for offline tests; semantic
+  retrieval requires `EMBEDDING_PROVIDER=openrouter` and an API key.
+- The MTR MCP connector is an external demo dependency; automated tests use a
+  mock transport so CI does not depend on it.
 - External LLM providers may introduce privacy and data-governance
   considerations.
 - The current prototype does not provide enterprise-grade RBAC or multi-tenant
@@ -670,10 +675,12 @@ email_assistant/
 - [x] RAG → Drafter with provenance + injection-safe prompt
 - [x] MCP runtime — discovery, permissions, audit (default-deny)
 - [x] Observability — processing runs, latency, token usage
-- [ ] Real semantic embedding provider (OpenAI / Ollama)
-- [ ] Real MCP transport (stdio / HTTP)
+- [x] OpenRouter semantic embedding provider (`qwen/qwen3-embedding-8b`)
+- [x] Real MCP transport (Streamable HTTP) — live-verified against MTR MCP
+- [x] MiMo structured runtime contract (`xiaomi/mimo-v2.5-pro`)
+- [x] Evaluation dataset v1 (950 records) + harness (metrics, runners)
+- [ ] Full test-split evaluation run (preliminary sample complete)
 - [ ] CrewAI long-term memory via SQLite (`memory=True`)
-- [ ] Evaluation experiments (classification, retrieval benchmark, RAG, safety)
 - [ ] Final FYP Report
 
 ---
