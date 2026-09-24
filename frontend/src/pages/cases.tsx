@@ -72,7 +72,7 @@ export default function Cases() {
   })
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 p-4 md:p-6">
       <PageHeader
         title="Cases"
         description="Processed emails with AI-generated drafts and approvals."

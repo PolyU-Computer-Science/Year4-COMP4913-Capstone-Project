@@ -171,7 +171,7 @@ export default function Inbox() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-4 md:p-6">
       <PageHeader
         title="Inbox"
         description="Read and process incoming emails."

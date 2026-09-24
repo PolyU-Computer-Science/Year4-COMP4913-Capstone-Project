@@ -62,7 +62,7 @@ export default function Dashboard() {
   })
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 p-4 md:p-6">
       <PageHeader
         title="Dashboard"
         description="An overview of what the system is processing right now."

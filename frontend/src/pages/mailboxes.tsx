@@ -48,7 +48,7 @@ export default function MailboxesPage() {
   })
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 p-4 md:p-6">
       <PageHeader
         title="Mailboxes"
         description="Manage email sources and processing."

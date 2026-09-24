@@ -89,7 +89,7 @@ export default function GeneralPage() {
   }
 
   return (
-    <div className="flex max-w-3xl flex-col gap-4">
+    <div className="flex max-w-3xl flex-col gap-4 p-4 md:p-6">
       <PageHeader
         title="General"
         description="Global prompt and parameter defaults for the classification and drafting stages."

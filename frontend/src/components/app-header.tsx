@@ -26,11 +26,13 @@ const STATIC_LABELS: Record<string, string> = {
   settings: 'Settings',
   overview: 'Overview',
   connection: 'Connection',
-  ai: 'AI & Processing',
+  processing: 'Processing',
   fields: 'Fields',
   topics: 'Topics',
   knowledge: 'Knowledge',
+  routing: 'Routing',
   connectors: 'Connectors',
+  activity: 'Activity',
 }
 
 function resolveCrumbs(pathname: string): Crumb[] {

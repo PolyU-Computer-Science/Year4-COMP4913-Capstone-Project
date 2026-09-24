@@ -95,8 +95,8 @@ export default function CaseDetailPage() {
   const contextPanel = <ContextPanel caseItem={caseItem} tab={contextTab} onTabChange={setContextTab} />
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-start justify-between gap-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3 md:px-6">
         <div className="flex min-w-0 flex-col gap-1">
           <button
             className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -163,7 +163,7 @@ export default function CaseDetailPage() {
             </ResizablePanel>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={30} minSize={25} className="min-w-[280px]">
-              <div className="h-full pl-1">{contextPanel}</div>
+              <div className="h-full">{contextPanel}</div>
             </ResizablePanel>
           </ResizablePanelGroup>
         )}
@@ -188,7 +188,7 @@ function ContextPanel({
   onTabChange: (value: string) => void
 }) {
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border">
+    <div className="flex min-h-0 flex-col border-l">
       <Tabs value={tab} onValueChange={(v) => onTabChange(v ?? 'details')}>
         <TabsList variant="line" className="w-full">
           <TabsTrigger value="details" className="flex-1">
@@ -323,7 +323,7 @@ function MainWorkspace({
 }) {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b pb-3">
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3 md:px-6">
         <span className="truncate font-medium">{caseItem.email.sender}</span>
         <span className="text-sm text-muted-foreground">
           {formatDate(caseItem.email.timestamp)}
@@ -331,7 +331,7 @@ function MainWorkspace({
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-4">
+        <div className="p-4 md:p-6">
           <EmailBody
             body={caseItem.email.body}
             html={caseItem.email.html}
@@ -340,7 +340,7 @@ function MainWorkspace({
         </div>
       </ScrollArea>
 
-      <div className="flex shrink-0 flex-col gap-3 border-t pt-3">
+      <div className="flex shrink-0 flex-col gap-3 border-t px-4 py-3 md:px-6">
         <div className="flex flex-col gap-1">
           <span className="text-sm font-semibold">AI Draft</span>
           <span className="text-xs text-muted-foreground">

@@ -72,7 +72,7 @@ export function OverviewTab({ mailbox }: { mailbox: Mailbox }) {
                 ? `${topics.length} topic${topics.length === 1 ? '' : 's'} configured`
                 : 'No topics configured'
             }
-            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/topics`)}
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/topics`)}
           />
           <ConfigItem
             icon={<Text />}
@@ -82,7 +82,7 @@ export function OverviewTab({ mailbox }: { mailbox: Mailbox }) {
                 ? `${fields.length} field${fields.length === 1 ? '' : 's'} configured`
                 : 'No custom fields configured'
             }
-            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/fields`)}
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/fields`)}
           />
           <ConfigItem
             icon={<Hash />}
@@ -92,7 +92,7 @@ export function OverviewTab({ mailbox }: { mailbox: Mailbox }) {
                 ? `${knowledge.length} source${knowledge.length === 1 ? '' : 's'} connected`
                 : 'No knowledge sources connected'
             }
-            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/knowledge`)}
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/knowledge`)}
           />
           <ConfigItem
             icon={<Plug />}
@@ -102,7 +102,7 @@ export function OverviewTab({ mailbox }: { mailbox: Mailbox }) {
                 ? `${enabledConnectors} connector${enabledConnectors === 1 ? '' : 's'} enabled`
                 : 'No connectors enabled'
             }
-            onClick={() => navigate(`/mailboxes/${mailbox.id}/integrations`)}
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/connectors`)}
           />
         </ItemGroup>
       </section>
