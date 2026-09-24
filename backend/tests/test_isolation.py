@@ -224,6 +224,31 @@ def test_legacy_backfill_migrates_null_mailbox_emails(monkeypatch) -> None:
     assert migrate_legacy_emails() == 0
 
 
+def test_legacy_mailbox_is_system_and_hidden(monkeypatch) -> None:
+    import email_assistant.core
+    from email_assistant.core.migrations import migrate_legacy_emails
+
+    monkeypatch.setattr(
+        email_assistant.core, "fetch_emails", lambda: [SUPPORT_EMAIL]
+    )
+    client.post("/api/emails/sync")
+    migrate_legacy_emails()
+
+    # A real mailbox is visible; the Legacy system mailbox is hidden by default.
+    client.post(
+        "/api/mailboxes", json={"name": "Support", "address": "s@x.com"}
+    )
+    listed = client.get("/api/mailboxes").json()
+    names = {m["name"] for m in listed}
+    assert "Support" in names
+    assert "Legacy" not in names
+
+    # Explicitly requesting system mailboxes reveals Legacy with is_system.
+    with_system = client.get("/api/mailboxes?include_system=true").json()
+    legacy = next(m for m in with_system if m["name"] == "Legacy")
+    assert legacy["is_system"] is True
+
+
 def test_dedup_is_scoped_to_mailbox(monkeypatch) -> None:
     import email_assistant.core
 

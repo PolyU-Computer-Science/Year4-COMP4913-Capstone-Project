@@ -6,7 +6,7 @@ knowledge sources and connectors into a single business context.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from email_assistant.core.settings_store import SettingsStore
 
@@ -45,8 +45,11 @@ def _require_mailbox(mailbox_id: int) -> None:
 # ---- mailboxes ----
 
 @router.get("", response_model=list[MailboxOut])
-def list_mailboxes() -> list[MailboxOut]:
-    return [_mailbox_out(m) for m in _store().list_mailboxes()]
+def list_mailboxes(
+    include_system: bool = False,
+) -> list[MailboxOut]:
+    """List mailboxes. System mailboxes (e.g. Legacy) are hidden by default."""
+    return [_mailbox_out(m) for m in _store().list_mailboxes(include_system=include_system)]
 
 
 @router.post("", response_model=MailboxOut, status_code=201)

@@ -1,19 +1,28 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Send } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, Send } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { CategoryBadge } from '@/components/category-badge'
 import { CaseFields } from '@/components/case-fields'
 import { EmailBody } from '@/components/email-body'
-import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { fetchCases, sendCase, updateCaseDraft } from '@/lib/api'
 import type { Case } from '@/lib/types'
+import { useIsMobile } from '@/hooks/use-mobile'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { toast } from 'sonner'
 
 function formatDate(iso: string): string {
@@ -22,7 +31,6 @@ function formatDate(iso: string): string {
   return date.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   })
@@ -31,8 +39,11 @@ function formatDate(iso: string): string {
 export default function CaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
+  const [contextTab, setContextTab] = useState('details')
+  const [showMobileContext, setShowMobileContext] = useState(false)
 
   const { data: cases = [] } = useQuery<Case[]>({
     queryKey: ['cases'],
@@ -81,170 +92,294 @@ export default function CaseDetailPage() {
   }
 
   const sent = caseItem.sent_at !== null
+  const contextPanel = <ContextPanel caseItem={caseItem} tab={contextTab} onTabChange={setContextTab} />
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title={`#${caseItem.id.slice(0, 6).toUpperCase()}`}
-        description={caseItem.email.subject}
-        action={
-          <div className="flex items-center gap-2">
-            <StatusBadge status={sent ? 'sent' : 'draft'} />
-            <Badge
-              variant="outline"
-              className="capitalize"
-            >
-              {caseItem.classification.priority}
-            </Badge>
-          </div>
-        }
-      />
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <button
+            className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => navigate('/cases')}
+          >
+            <ChevronLeft className="size-4" />
+            Cases
+          </button>
+          <h1 className="truncate text-xl font-bold tracking-tight">
+            {caseItem.email.subject}
+          </h1>
+          <span className="text-xs text-muted-foreground">
+            #{caseItem.id.slice(0, 6).toUpperCase()}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusBadge status={sent ? 'sent' : 'draft'} />
+          <Badge variant="outline" className="capitalize">
+            {caseItem.classification.priority}
+          </Badge>
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Original Message</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <div className="text-sm">
-                <span className="font-medium">{caseItem.email.sender}</span>
-              </div>
-              <div className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-3">
-                <EmailBody
-                  body={caseItem.email.body}
-                  html={caseItem.email.html}
-                  emailId={caseItem.email.id}
-                />
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {formatDate(caseItem.email.timestamp)}
-              </span>
-            </CardContent>
-          </Card>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {isMobile ? (
+          <>
+            <MainWorkspace
+              caseItem={caseItem}
+              draft={draft}
+              sent={sent}
+              isMobile
+              onDraftChange={setDraft}
+              onSave={() =>
+                saveDraftMutation.mutate({ id: caseItem.id, draft })
+              }
+              onSend={() => sendMutation.mutate(caseItem.id)}
+              savePending={saveDraftMutation.isPending}
+              sendPending={sendMutation.isPending}
+            />
+            <Sheet open={showMobileContext} onOpenChange={setShowMobileContext}>
+              <SheetContent side="right" className="sm:max-w-sm">
+                <SheetHeader>
+                  <SheetTitle>Case details</SheetTitle>
+                </SheetHeader>
+                {contextPanel}
+              </SheetContent>
+            </Sheet>
+          </>
+        ) : (
+          <ResizablePanelGroup orientation="horizontal">
+            <ResizablePanel defaultSize={70} minSize={55}>
+              <MainWorkspace
+                caseItem={caseItem}
+                draft={draft}
+                sent={sent}
+                onDraftChange={setDraft}
+                onSave={() =>
+                  saveDraftMutation.mutate({ id: caseItem.id, draft })
+                }
+                onSend={() => sendMutation.mutate(caseItem.id)}
+                savePending={saveDraftMutation.isPending}
+                sendPending={sendMutation.isPending}
+              />
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize={30} minSize={25} className="min-w-[280px]">
+              <div className="h-full pl-1">{contextPanel}</div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        )}
+      </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>AI Analysis</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm">
-              <div className="flex items-center gap-2">
-                <CategoryBadge category={caseItem.classification.category} />
-                {caseItem.classification.topic && (
-                  <Badge variant="outline">{caseItem.classification.topic}</Badge>
-                )}
-                {caseItem.topic_id === null && caseItem.topic_raw && (
-                  <Badge variant="outline" className="text-muted-foreground">
-                    Unclassified
-                  </Badge>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-xs text-muted-foreground">Priority</span>
+      {isMobile && (
+        <Button variant="outline" className="lg:hidden" onClick={() => setShowMobileContext(true)}>
+          View case details
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function ContextPanel({
+  caseItem,
+  tab,
+  onTabChange,
+}: {
+  caseItem: Case
+  tab: string
+  onTabChange: (value: string) => void
+}) {
+  return (
+    <div className="flex min-h-0 flex-col rounded-lg border">
+      <Tabs value={tab} onValueChange={(v) => onTabChange(v ?? 'details')}>
+        <TabsList variant="line" className="w-full">
+          <TabsTrigger value="details" className="flex-1">
+            Details
+          </TabsTrigger>
+          <TabsTrigger value="ai" className="flex-1">
+            AI Context
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-4 p-4">
+          {tab === 'details' ? (
+            <>
+              <Section title="Case">
+                <Row label="Status">
+                  <StatusBadge status={caseItem.sent_at !== null ? 'sent' : 'draft'} />
+                </Row>
+                <Row label="Priority">
                   <span className="capitalize">{caseItem.classification.priority}</span>
+                </Row>
+                <Row label="Mailbox">
+                  <span>{caseItem.mailbox_id ?? '—'}</span>
+                </Row>
+              </Section>
+
+              <Separator />
+
+              <Section title="Custom Fields">
+                <CaseFields caseId={caseItem.id} />
+              </Section>
+            </>
+          ) : (
+            <>
+              <Section title="Classification">
+                <div className="flex flex-wrap items-center gap-2">
+                  <CategoryBadge category={caseItem.classification.category} />
+                  {caseItem.classification.topic && (
+                    <Badge variant="outline">{caseItem.classification.topic}</Badge>
+                  )}
+                  {caseItem.topic_id === null && caseItem.topic_raw && (
+                    <Badge variant="outline" className="text-muted-foreground">
+                      Unclassified
+                    </Badge>
+                  )}
                 </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-xs text-muted-foreground">Urgency</span>
+                <Row label="Urgency">
                   <span>{caseItem.classification.urgency_score}/10</span>
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-xs text-muted-foreground">Requires Reply</span>
-                  <span>{caseItem.classification.summary ? 'Yes' : 'No'}</span>
-                </div>
-              </div>
+                </Row>
+              </Section>
+
               {caseItem.classification.summary && (
-                <p className="text-muted-foreground">
-                  {caseItem.classification.summary}
-                </p>
+                <>
+                  <Separator />
+                  <Section title="Summary">
+                    <p className="text-sm text-muted-foreground">
+                      {caseItem.classification.summary}
+                    </p>
+                  </Section>
+                </>
               )}
-            </CardContent>
-          </Card>
 
-          <CaseFields caseId={caseItem.id} />
-
-          {caseItem.knowledge_refs && caseItem.knowledge_refs.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Knowledge Used</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                {caseItem.knowledge_refs.map((ref) => (
-                  <div
-                    key={`${ref.source_id}-${ref.chunk_id}`}
-                    className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
-                  >
-                    <span>Source #{ref.source_id} · Chunk #{ref.chunk_id}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {ref.score.toFixed(3)}
-                    </span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+              {caseItem.knowledge_refs && caseItem.knowledge_refs.length > 0 && (
+                <>
+                  <Separator />
+                  <Section title="Knowledge Used">
+                    <div className="flex flex-col gap-2">
+                      {caseItem.knowledge_refs.map((ref) => (
+                        <Collapsible
+                          key={`${ref.source_id}-${ref.chunk_id}`}
+                          className="rounded-lg border"
+                        >
+                          <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-sm">
+                            <span className="truncate">
+                              Source #{ref.source_id}
+                            </span>
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              {ref.score.toFixed(3)}
+                              <ChevronRight className="size-3" />
+                            </span>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="border-t px-3 py-2 text-xs text-muted-foreground">
+                            <div className="flex flex-col gap-1">
+                              <span>Chunk ID: {ref.chunk_id}</span>
+                              <span>Score: {ref.score.toFixed(4)}</span>
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      ))}
+                    </div>
+                  </Section>
+                </>
+              )}
+            </>
           )}
         </div>
+      </ScrollArea>
+    </div>
+  )
+}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>AI Draft</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
-              <span className="text-sm text-muted-foreground">To</span>
-              <span className="truncate text-sm">{caseItem.email.sender}</span>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
-              <span className="text-sm text-muted-foreground">Subject</span>
-              <span className="truncate text-sm">Re: {caseItem.email.subject}</span>
-            </div>
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={12}
-              className="w-full"
-              disabled={sent}
-            />
-          </CardContent>
-          <div className="flex items-center justify-end gap-2 border-t p-4">
-            {sent ? (
-              <StatusBadge status="sent" label={`Sent ${formatDate(caseItem.sent_at!)}`} />
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    saveDraftMutation.mutate({ id: caseItem.id, draft })
-                  }
-                  disabled={saveDraftMutation.isPending}
-                >
-                  {saveDraftMutation.isPending ? (
-                    <Loader2 className="animate-spin" />
-                  ) : null}
-                  Save Draft
-                </Button>
-                <Button
-                  onClick={() => sendMutation.mutate(caseItem.id)}
-                  disabled={sendMutation.isPending || draft.trim().length === 0}
-                >
-                  {sendMutation.isPending ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Send />
-                  )}
-                  Approve &amp; Send
-                </Button>
-              </>
-            )}
-          </div>
-        </Card>
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {children}
+    </div>
+  )
+}
+
+function MainWorkspace({
+  caseItem,
+  draft,
+  sent,
+  isMobile = false,
+  onDraftChange,
+  onSave,
+  onSend,
+  savePending,
+  sendPending,
+}: {
+  caseItem: Case
+  draft: string
+  sent: boolean
+  isMobile?: boolean
+  onDraftChange: (value: string) => void
+  onSave: () => void
+  onSend: () => void
+  savePending: boolean
+  sendPending: boolean
+}) {
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b pb-3">
+        <span className="truncate font-medium">{caseItem.email.sender}</span>
+        <span className="text-sm text-muted-foreground">
+          {formatDate(caseItem.email.timestamp)}
+        </span>
       </div>
 
-      <div className="flex justify-start">
-        <Button variant="ghost" onClick={() => navigate('/cases')}>
-          ← Back to cases
-        </Button>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="p-4">
+          <EmailBody
+            body={caseItem.email.body}
+            html={caseItem.email.html}
+            emailId={caseItem.email.id}
+          />
+        </div>
+      </ScrollArea>
+
+      <div className="flex shrink-0 flex-col gap-3 border-t pt-3">
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-semibold">AI Draft</span>
+          <span className="text-xs text-muted-foreground">
+            Replying to {caseItem.email.sender} · Re: {caseItem.email.subject}
+          </span>
+        </div>
+        <Textarea
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          rows={isMobile ? 8 : 10}
+          className="w-full"
+          disabled={sent}
+        />
+        <div className="flex items-center justify-end gap-2">
+          {sent ? (
+            <StatusBadge status="sent" label={`Sent ${formatDate(caseItem.sent_at!)}`} />
+          ) : (
+            <>
+              <Button variant="outline" onClick={onSave} disabled={savePending}>
+                {savePending ? <Loader2 className="animate-spin" /> : null}
+                Save Draft
+              </Button>
+              <Button onClick={onSend} disabled={sendPending || draft.trim().length === 0}>
+                {sendPending ? <Loader2 className="animate-spin" /> : <Send />}
+                Approve &amp; Send
+              </Button>
+            </>
+          )}
+        </div>
       </div>
+    </div>
+  )
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      {children}
     </div>
   )
 }

@@ -1,38 +1,47 @@
 import { useQuery } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
+import { Loader2, MoreHorizontal } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { fetchMailbox } from '@/lib/api'
 import { AiTab } from './tabs/ai'
 import { ConnectionTab } from './tabs/connection'
 import { ConnectorsTab } from './tabs/connectors'
-import { FieldsTab } from './tabs/fields'
-import { KnowledgeTab } from './tabs/knowledge'
+import { DataTab } from './tabs/data'
 import { ObservabilityTab } from './tabs/observability'
 import { OverviewTab } from './tabs/overview'
-import { TopicsTab } from './tabs/topics'
 
 const TABS = [
   { value: 'overview', label: 'Overview' },
   { value: 'connection', label: 'Connection' },
-  { value: 'ai', label: 'AI & Processing' },
-  { value: 'fields', label: 'Fields' },
-  { value: 'topics', label: 'Topics' },
-  { value: 'knowledge', label: 'Knowledge' },
-  { value: 'connectors', label: 'Connectors' },
-  { value: 'observability', label: 'Observability' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'data', label: 'Data' },
+  { value: 'integrations', label: 'Integrations' },
+  { value: 'activity', label: 'Activity' },
 ]
 
 export default function MailboxDetailPage() {
-  const { mailboxId, tab = 'overview' } = useParams<{
+  const { mailboxId, tab, sub } = useParams<{
     mailboxId: string
     tab?: string
+    sub?: string
   }>()
   const navigate = useNavigate()
   const id = Number(mailboxId)
+
+  // The `/data/:sub` route captures `sub` but no `tab`; map it back to `data`.
+  const effectiveTab = tab ?? (sub ? 'data' : 'overview')
 
   const { data: mailbox, isLoading } = useQuery({
     queryKey: ['mailbox', id],
@@ -49,21 +58,59 @@ export default function MailboxDetailPage() {
     )
   }
 
-  const activeTab = TABS.some((t) => t.value === tab) ? tab : 'overview'
+  const isSystem = mailbox.is_system
+  const availableTabs = isSystem ? TABS.filter((t) => t.value === 'overview') : TABS
+  const activeTab = availableTabs.some((t) => t.value === effectiveTab)
+    ? effectiveTab
+    : 'overview'
 
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title={mailbox.name}
-        description={mailbox.address}
-        action={<StatusBadge status={mailbox.status} />}
+        description={mailbox.address || undefined}
+        action={
+          isSystem ? (
+            <StatusBadge status="neutral" label="System" />
+          ) : (
+            <div className="flex items-center gap-2">
+              <StatusBadge status={mailbox.status} />
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button variant="outline" size="icon-sm">
+                      <MoreHorizontal />
+                    </Button>
+                  }
+                />
+                <DropdownMenuContent align="end" side="bottom">
+                  <DropdownMenuItem onClick={() => navigate(`/mailboxes/${id}/connection`)}>
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-destructive">
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        }
       />
 
-      <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">
-          {mailbox.purpose || 'No description'}
-        </p>
-      </div>
+      {mailbox.purpose ? (
+        <p className="text-sm text-muted-foreground">{mailbox.purpose}</p>
+      ) : null}
+
+      {isSystem ? (
+        <Alert>
+          <AlertDescription>
+            This is a system mailbox containing migrated emails whose original
+            mailbox could not be identified. It cannot receive or send new
+            mail.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="overflow-x-auto">
         <Tabs
@@ -71,7 +118,7 @@ export default function MailboxDetailPage() {
           onValueChange={(value) => navigate(`/mailboxes/${id}/${value}`)}
         >
           <TabsList variant="line" className="w-fit">
-            {TABS.map((t) => (
+            {availableTabs.map((t) => (
               <TabsTrigger key={t.value} value={t.value}>
                 {t.label}
               </TabsTrigger>
@@ -83,12 +130,10 @@ export default function MailboxDetailPage() {
       <div className="pt-1">
         {activeTab === 'overview' && <OverviewTab mailbox={mailbox} />}
         {activeTab === 'connection' && <ConnectionTab mailbox={mailbox} />}
-        {activeTab === 'ai' && <AiTab mailbox={mailbox} />}
-        {activeTab === 'fields' && <FieldsTab mailboxId={id} />}
-        {activeTab === 'topics' && <TopicsTab mailboxId={id} />}
-        {activeTab === 'knowledge' && <KnowledgeTab mailboxId={id} />}
-        {activeTab === 'connectors' && <ConnectorsTab mailboxId={id} />}
-        {activeTab === 'observability' && <ObservabilityTab mailboxId={id} />}
+        {activeTab === 'processing' && <AiTab mailbox={mailbox} />}
+        {activeTab === 'data' && <DataTab mailboxId={id} />}
+        {activeTab === 'integrations' && <ConnectorsTab mailboxId={id} />}
+        {activeTab === 'activity' && <ObservabilityTab mailboxId={id} />}
       </div>
     </div>
   )

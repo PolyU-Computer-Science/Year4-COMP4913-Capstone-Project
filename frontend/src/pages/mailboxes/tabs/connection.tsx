@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plug } from 'lucide-react'
+import { ChevronDown, Loader2, Plug } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,10 +15,12 @@ import {
 } from '@/components/ui/select'
 import { testMailbox, updateMailbox } from '@/lib/api'
 import type { Mailbox, MailboxIn } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 export function ConnectionTab({ mailbox }: { mailbox: Mailbox }) {
   const queryClient = useQueryClient()
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [form, setForm] = useState({
     imap_host: mailbox.imap_host,
     imap_port: String(mailbox.imap_port),
@@ -114,12 +116,6 @@ export function ConnectionTab({ mailbox }: { mailbox: Mailbox }) {
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Folder">
-              <Input
-                value={form.imap_folder}
-                onChange={(e) => set('imap_folder', e.target.value)}
-              />
-            </Field>
             <Field label="Password">
               <Input
                 type="password"
@@ -128,14 +124,39 @@ export function ConnectionTab({ mailbox }: { mailbox: Mailbox }) {
                 placeholder={mailbox.has_password ? '•••••• (leave blank to keep)' : 'app password'}
               />
             </Field>
-            <Field label="Max messages / sync">
-              <Input
-                type="number"
-                value={form.max_emails}
-                onChange={(e) => set('max_emails', e.target.value)}
-              />
-            </Field>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronDown className={cn('size-4 transition-transform', showAdvanced && 'rotate-180')} />
+            Advanced settings
+          </button>
+
+          {showAdvanced && (
+            <div className="flex flex-col gap-3 rounded-lg border p-3">
+              <Field label="Source folder">
+                <Input
+                  value={form.imap_folder}
+                  onChange={(e) => set('imap_folder', e.target.value)}
+                  placeholder="INBOX"
+                />
+              </Field>
+              <p className="text-xs text-muted-foreground">
+                Choose which IMAP folder this mailbox should monitor. Most
+                accounts should use Inbox.
+              </p>
+              <Field label="Max messages / sync">
+                <Input
+                  type="number"
+                  value={form.max_emails}
+                  onChange={(e) => set('max_emails', e.target.value)}
+                />
+              </Field>
+            </div>
+          )}
         </CardContent>
       </Card>
 

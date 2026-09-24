@@ -175,10 +175,17 @@ class SettingsStore:
                 drafter_temperature REAL,
                 drafter_max_tokens INTEGER,
                 use_knowledge INTEGER DEFAULT 0,
-                instructions TEXT DEFAULT ''
+                instructions TEXT DEFAULT '',
+                is_system INTEGER DEFAULT 0
             )
             """
         )
+        try:
+            conn.execute(
+                "ALTER TABLE mailboxes ADD COLUMN is_system INTEGER DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS topics (
@@ -745,15 +752,21 @@ class SettingsStore:
             mailbox[field] = float(value) if value is not None else None
         for field in ("auto_process", "generate_drafts", "human_approval", "use_knowledge"):
             mailbox[field] = bool(mailbox.get(field))
+        mailbox["is_system"] = bool(mailbox.get("is_system"))
         return mailbox
 
-    def list_mailboxes(self) -> list[dict[str, Any]]:
+    def list_mailboxes(self, include_system: bool = True) -> list[dict[str, Any]]:
         with self._lock:
             conn = self._connect()
             try:
-                rows = conn.execute(
-                    "SELECT * FROM mailboxes ORDER BY id"
-                ).fetchall()
+                if include_system:
+                    rows = conn.execute(
+                        "SELECT * FROM mailboxes ORDER BY id"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM mailboxes WHERE is_system = 0 ORDER BY id"
+                    ).fetchall()
             finally:
                 conn.close()
         return [self._mailbox_row_to_dict(row) for row in rows]
@@ -794,10 +807,11 @@ class SettingsStore:
                         generate_drafts, human_approval, classifier_config_id,
                         drafter_config_id, classifier_temperature,
                         classifier_max_tokens, drafter_temperature,
-                        drafter_max_tokens, use_knowledge, instructions
+                        drafter_max_tokens, use_knowledge, instructions,
+                        is_system
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(data.get("name", "")),
@@ -824,6 +838,7 @@ class SettingsStore:
                         data.get("drafter_max_tokens"),
                         1 if data.get("use_knowledge") else 0,
                         str(data.get("instructions", "")),
+                        1 if data.get("is_system") else 0,
                     ),
                 )
                 mailbox_id = cur.lastrowid

@@ -32,7 +32,14 @@ def migrate_legacy_emails() -> int:
                 "name": LEGACY_MAILBOX_NAME,
                 "address": "",
                 "purpose": "Migrated emails without original mailbox metadata",
+                "is_system": True,
             }
         )
+    elif not mailbox.get("is_system"):
+        # Mark an existing (pre-flag) legacy mailbox as a system mailbox.
+        settings.update_mailbox(
+            int(mailbox["id"]), {"is_system": True}
+        )
+        mailbox = settings.get_mailbox(int(mailbox["id"]))
 
     return store.backfill_missing_mailbox_ids(int(mailbox["id"]))

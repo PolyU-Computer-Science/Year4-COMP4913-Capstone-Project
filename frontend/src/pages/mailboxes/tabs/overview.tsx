@@ -1,14 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
+import { ChevronRight, Hash, Plug, Tag, Text } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
-import { StatusBadge } from '@/components/status-badge'
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from '@/components/ui/item'
+import { Separator } from '@/components/ui/separator'
 import {
   fetchMailboxConnectors,
   fetchMailboxKnowledge,
@@ -39,113 +42,111 @@ export function OverviewTab({ mailbox }: { mailbox: Mailbox }) {
 
   const enabledConnectors = connectors.filter((c) => c.enabled).length
 
+  const connectionState = mailbox.address && mailbox.imap_host ? 'Connected' : 'Not configured'
+  const aiState = mailbox.classifier_config_id ? 'Configured' : 'Not configured'
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <StatusCard label="Incoming Mail" status="Healthy" />
-        <StatusCard label="Outgoing Mail" status="Healthy" />
-        <StatusCard
-          label="AI"
-          status={mailbox.classifier_config_id ? 'Ready' : 'Error'}
-        />
-        <StatusCard
-          label="Knowledge"
-          status={knowledge.length > 0 ? 'Ready' : 'Disabled'}
-        />
-        <StatusCard
-          label="Connectors"
-          status={enabledConnectors > 0 ? 'Connected' : 'Disabled'}
-        />
-      </div>
+    <div className="flex max-w-2xl flex-col gap-6">
+      <section>
+        <h3 className="mb-3 text-sm font-semibold">Mailbox health</h3>
+        <div className="flex flex-col">
+          <HealthRow label="Connection" value={connectionState} />
+          <HealthRow
+            label="Processing"
+            value={mailbox.auto_process ? 'On' : 'Off'}
+          />
+          <HealthRow label="AI" value={aiState} />
+        </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Configuration</CardTitle>
-            <CardDescription>
-              What is configured on this mailbox.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            <ConfigRow
-              label="Topics"
-              value={`${topics.length}`}
-              onClick={() => navigate(`/mailboxes/${mailbox.id}/topics`)}
-            />
-            <ConfigRow
-              label="Custom Fields"
-              value={`${fields.length}`}
-              onClick={() => navigate(`/mailboxes/${mailbox.id}/fields`)}
-            />
-            <ConfigRow
-              label="Knowledge"
-              value={`${knowledge.length} source${knowledge.length === 1 ? '' : 's'}`}
-              onClick={() => navigate(`/mailboxes/${mailbox.id}/knowledge`)}
-            />
-            <ConfigRow
-              label="Connectors"
-              value={`${enabledConnectors} enabled`}
-              onClick={() => navigate(`/mailboxes/${mailbox.id}/connectors`)}
-            />
-          </CardContent>
-        </Card>
+      <Separator />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Processing</CardTitle>
-            <CardDescription>How incoming mail is handled.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Auto-process incoming mail</span>
-              <StatusBadge
-                status={mailbox.auto_process ? 'active' : 'disabled'}
-                label={mailbox.auto_process ? 'On' : 'Off'}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Generate reply drafts</span>
-              <StatusBadge
-                status={mailbox.generate_drafts ? 'active' : 'disabled'}
-                label={mailbox.generate_drafts ? 'On' : 'Off'}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Human approval</span>
-              <StatusBadge status="active" label="Required" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <section>
+        <h3 className="mb-3 text-sm font-semibold">Configuration</h3>
+        <ItemGroup className="gap-1">
+          <ConfigItem
+            icon={<Tag />}
+            title="Topics"
+            description={
+              topics.length > 0
+                ? `${topics.length} topic${topics.length === 1 ? '' : 's'} configured`
+                : 'No topics configured'
+            }
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/topics`)}
+          />
+          <ConfigItem
+            icon={<Text />}
+            title="Custom fields"
+            description={
+              fields.length > 0
+                ? `${fields.length} field${fields.length === 1 ? '' : 's'} configured`
+                : 'No custom fields configured'
+            }
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/fields`)}
+          />
+          <ConfigItem
+            icon={<Hash />}
+            title="Knowledge"
+            description={
+              knowledge.length > 0
+                ? `${knowledge.length} source${knowledge.length === 1 ? '' : 's'} connected`
+                : 'No knowledge sources connected'
+            }
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/data/knowledge`)}
+          />
+          <ConfigItem
+            icon={<Plug />}
+            title="Connectors"
+            description={
+              enabledConnectors > 0
+                ? `${enabledConnectors} connector${enabledConnectors === 1 ? '' : 's'} enabled`
+                : 'No connectors enabled'
+            }
+            onClick={() => navigate(`/mailboxes/${mailbox.id}/integrations`)}
+          />
+        </ItemGroup>
+      </section>
     </div>
   )
 }
 
-function StatusCard({ label, status }: { label: string; status: string }) {
+function HealthRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border p-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <StatusBadge status={status} />
+    <div className="flex items-center justify-between border-b py-3 text-sm last:border-b-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium">{value}</span>
     </div>
   )
 }
 
-function ConfigRow({
-  label,
-  value,
+function ConfigItem({
+  icon,
+  title,
+  description,
   onClick,
 }: {
-  label: string
-  value: string
+  icon: React.ReactNode
+  title: string
+  description: string
   onClick: () => void
 }) {
   return (
-    <button
+    <Item
+      variant="outline"
+      className="cursor-pointer"
       onClick={onClick}
-      className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
+      render={<div />}
     >
-      <span>{label}</span>
-      <span className="font-medium">{value}</span>
-    </button>
+      <ItemMedia variant="icon" className="size-8 rounded-lg bg-muted">
+        {icon}
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>{title}</ItemTitle>
+        <ItemDescription>{description}</ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <ChevronRight className="size-4 text-muted-foreground" />
+      </ItemActions>
+    </Item>
   )
 }

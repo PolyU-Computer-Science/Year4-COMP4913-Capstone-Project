@@ -161,6 +161,7 @@ export interface Mailbox {
   drafter_max_tokens: number | null
   use_knowledge: boolean
   instructions: string
+  is_system: boolean
 }
 
 export interface MailboxIn {

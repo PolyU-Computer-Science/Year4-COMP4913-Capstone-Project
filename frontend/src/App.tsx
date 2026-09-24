@@ -19,7 +19,7 @@ function AppShell() {
       <AppSidebar />
       <SidebarInset>
         <AppHeader />
-        <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 md:p-6">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
@@ -28,6 +28,10 @@ function AppShell() {
             <Route path="/cases/:caseId" element={<CaseDetailPage />} />
             <Route path="/mailboxes" element={<MailboxesPage />} />
             <Route path="/mailboxes/new" element={<NewMailboxPage />} />
+            <Route
+              path="/mailboxes/:mailboxId/data/:sub"
+              element={<MailboxDetailPage />}
+            />
             <Route
               path="/mailboxes/:mailboxId/:tab?"
               element={<MailboxDetailPage />}

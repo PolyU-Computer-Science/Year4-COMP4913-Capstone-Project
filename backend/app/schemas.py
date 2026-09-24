@@ -212,6 +212,7 @@ class MailboxIn(BaseModel):
     drafter_max_tokens: int | None = None
     use_knowledge: bool = False
     instructions: str = ""
+    is_system: bool = False
 
 
 class MailboxOut(BaseModel):
@@ -242,6 +243,7 @@ class MailboxOut(BaseModel):
     drafter_max_tokens: int | None = None
     use_knowledge: bool = False
     instructions: str = ""
+    is_system: bool = False
 
 
 class TopicIn(BaseModel):

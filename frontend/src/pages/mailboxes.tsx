@@ -8,7 +8,6 @@ import { EmptyState } from '@/components/empty-state'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,14 +16,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { deleteMailbox, fetchMailboxes } from '@/lib/api'
 import type { Mailbox } from '@/lib/types'
 import { toast } from 'sonner'
@@ -60,7 +51,7 @@ export default function MailboxesPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Mailboxes"
-        description="Manage business email contexts and their AI configuration."
+        description="Manage email sources and processing."
         action={
           <Button onClick={() => navigate('/mailboxes/new')}>
             <Plus />
@@ -89,82 +80,16 @@ export default function MailboxesPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <Card>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Purpose</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>AI</TableHead>
-                    <TableHead className="w-8" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((mailbox) => (
-                    <TableRow
-                      key={mailbox.id}
-                      className="cursor-pointer"
-                      onClick={() => navigate(`/mailboxes/${mailbox.id}/overview`)}
-                    >
-                      <TableCell className="font-medium">{mailbox.name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {mailbox.address}
-                      </TableCell>
-                      <TableCell className="max-w-52 truncate text-muted-foreground">
-                        {mailbox.purpose || '—'}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={mailbox.status} />
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge
-                          status={mailbox.classifier_config_id ? 'ready' : 'warning'}
-                          label={mailbox.classifier_config_id ? 'Ready' : 'Unconfigured'}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button variant="ghost" size="icon-sm">
-                                <MoreHorizontal />
-                              </Button>
-                            }
-                          />
-                          <DropdownMenuContent align="end" side="bottom">
-                            <DropdownMenuItem
-                              onClick={() =>
-                                navigate(`/mailboxes/${mailbox.id}/overview`)
-                              }
-                            >
-                              Open
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() =>
-                                navigate(`/mailboxes/${mailbox.id}/connection`)
-                              }
-                            >
-                              Connection
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={() => setToDelete(mailbox)}
-                            >
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {filtered.map((mailbox) => (
+              <MailboxCard
+                key={mailbox.id}
+                mailbox={mailbox}
+                onOpen={() => navigate(`/mailboxes/${mailbox.id}/overview`)}
+                onDelete={() => setToDelete(mailbox)}
+              />
+            ))}
+          </div>
         </>
       )}
 
@@ -181,6 +106,59 @@ export default function MailboxesPage() {
           if (toDelete) deleteMutation.mutate(toDelete.id)
         }}
       />
+    </div>
+  )
+}
+
+function MailboxCard({
+  mailbox,
+  onOpen,
+  onDelete,
+}: {
+  mailbox: Mailbox
+  onOpen: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div
+      className="group flex cursor-pointer flex-col gap-2 rounded-xl border p-4 transition-colors hover:border-ring"
+      onClick={onOpen}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate font-medium">{mailbox.name}</span>
+        <StatusBadge status={mailbox.status} />
+      </div>
+      {mailbox.address ? (
+        <span className="truncate text-sm text-muted-foreground">
+          {mailbox.address}
+        </span>
+      ) : null}
+      {mailbox.purpose ? (
+        <span className="line-clamp-2 text-sm text-muted-foreground">
+          {mailbox.purpose}
+        </span>
+      ) : null}
+      <div className="mt-auto flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          {mailbox.classifier_config_id ? 'AI configured' : 'AI not configured'}
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100">
+                <MoreHorizontal />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" side="bottom">
+            <DropdownMenuItem onClick={onOpen}>Open</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive" onClick={onDelete}>
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   )
 }

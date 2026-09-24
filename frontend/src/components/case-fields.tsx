@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Pencil } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -56,75 +55,60 @@ export function CaseFields({ caseId }: { caseId: string }) {
 
   if (fields.length === 0) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Custom Fields</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            No custom fields configured for this mailbox.
-          </p>
-        </CardContent>
-      </Card>
+      <p className="text-sm text-muted-foreground">
+        No custom fields configured for this mailbox.
+      </p>
     )
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Custom Fields</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {fields.map((field) => {
-          const key = String(field.field_id)
-          const value = draft[key]
+    <div className="flex flex-col gap-3">
+      {fields.map((field) => {
+        const key = String(field.field_id)
+        const value = draft[key]
 
-          return (
-            <div key={field.field_id} className="flex items-center justify-between gap-3">
-              <span className="w-36 shrink-0 text-sm text-muted-foreground">
-                {field.name}
-                {field.required ? <span className="text-destructive"> *</span> : null}
+        return (
+          <div key={field.field_id} className="flex items-center justify-between gap-3">
+            <span className="w-28 shrink-0 text-sm text-muted-foreground">
+              {field.name}
+              {field.required ? <span className="text-destructive"> *</span> : null}
+            </span>
+            {editing ? (
+              <FieldEditor
+                field={field}
+                value={value}
+                onChange={(v) => setDraft((p) => ({ ...p, [key]: v }))}
+              />
+            ) : (
+              <span className="flex-1 text-right text-sm font-medium">
+                {field.value === null || field.value === undefined
+                  ? '—'
+                  : String(field.value)}
               </span>
-              {editing ? (
-                <FieldEditor
-                  field={field}
-                  value={value}
-                  onChange={(v) => setDraft((p) => ({ ...p, [key]: v }))}
-                />
-              ) : (
-                <span className="flex-1 text-sm font-medium">
-                  {field.value === null || field.value === undefined
-                    ? '—'
-                    : String(field.value)}
-                </span>
-              )}
-            </div>
-          )
-        })}
+            )}
+          </div>
+        )
+      })}
 
-        <div className="flex justify-end gap-2 border-t pt-3">
-          {editing ? (
-            <>
-              <Button variant="outline" onClick={() => setEditing(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => saveMutation.mutate()}
-                disabled={saveMutation.isPending}
-              >
-                {saveMutation.isPending ? <Loader2 className="animate-spin" /> : null}
-                Save
-              </Button>
-            </>
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-              <Pencil />
-              Edit
-            </Button>
-          )}
+      {editing ? (
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            {saveMutation.isPending ? <Loader2 className="animate-spin" /> : null}
+            Save
+          </Button>
         </div>
-      </CardContent>
-    </Card>
+      ) : (
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+            <Pencil />
+            Edit
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -138,12 +122,7 @@ function FieldEditor({
   onChange: (value: unknown) => void
 }) {
   if (field.type === 'boolean') {
-    return (
-      <Switch
-        checked={Boolean(value)}
-        onCheckedChange={(v) => onChange(v)}
-      />
-    )
+    return <Switch checked={Boolean(value)} onCheckedChange={(v) => onChange(v)} />
   }
 
   if (field.type === 'select' && field.options.length > 0) {
